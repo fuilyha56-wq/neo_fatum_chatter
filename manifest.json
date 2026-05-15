@@ -1,0 +1,53 @@
+{
+    "name": "kokoro_flow_chatter",
+    "version": "2.0.0",
+    "description": "KokoroFlow 对话引擎 — 基于心理活动流的私聊特化聊天器",
+    "author": "MoFox Studio",
+    "dependencies": {
+        "plugins": [],
+        "components": []
+    },
+    "include": [
+        {
+            "component_type": "chatter",
+            "component_name": "kokoro_flow_chatter",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "kfc_reply",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "do_nothing",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "schedule_proactive",
+            "dependencies": []
+        },
+        {
+            "component_type": "event_handler",
+            "component_name": "kfc_proactive_handler",
+            "dependencies": []
+        },
+        {
+            "component_type": "config",
+            "component_name": "config",
+            "dependencies": []
+        }
+    ],
+    "entry_point": "plugin.py",
+    "min_core_version": "1.0.0",
+    "display_name": "kokoro_flow_chatter",
+    "categories": [
+        "chat"
+    ],
+    "tags": [
+        "kokoro_flow_chatter",
+        "chat",
+        "Repair_from_言柒"
+    ]
+}
