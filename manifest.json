@@ -1,5 +1,5 @@
 {
-    "name": "kokoro_flow_chatter_Lycoris_radiata",
+    "name": "kokoro_flow_chatter_lycoris_radiata",
     "version": "2.0.0",
     "description": "KokoroFlow 对话引擎 — 基于心理活动流的私聊特化聊天器",
     "author": "MoFox Studio",
@@ -41,7 +41,7 @@
     ],
     "entry_point": "plugin.py",
     "min_core_version": "1.0.0",
-    "display_name": "kokoro_flow_chatter_Lycoris_radiata",
+    "display_name": "kokoro_flow_chatter_lycoris_radiata",
     "categories": [
         "chat"
     ],
