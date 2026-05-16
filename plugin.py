@@ -31,7 +31,7 @@ class KFCPlugin(BasePlugin):
 
     plugin_name = "kokoro_flow_chatter_lycoris_radiata"
     plugin_version = "2.0.1"
-    plugin_author = "MoFox Studio"
+    plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [KFCConfig]
 
