@@ -38,7 +38,16 @@ def register_kfc_prompts() -> None:
             "alias_names": optional("、".join(personality.alias_names)),
             "personality_core": optional(personality.personality_core),
             "personality_side": optional(personality.personality_side),
+            "personality_core_line": optional(personality.personality_core)
+            .then(min_len(1))
+            .then(wrap("你", "\n")),
+            "personality_side_line": optional(personality.personality_side)
+            .then(min_len(1))
+            .then(wrap("", "。\n")),
             "identity": optional(personality.identity),
+            "identity_line": optional(personality.identity)
+            .then(min_len(1))
+            .then(wrap("你的身份是", "。\n")),
             "background_story": optional(personality.background_story)
             .then(min_len(10))
             .then(
