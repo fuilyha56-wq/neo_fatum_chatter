@@ -1,5 +1,28 @@
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 *.pyo
+*.so
+
+# Distribution
+*.egg-info/
+*.egg
 dist/
+build/
 *.mfp
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.venv/
+venv/
