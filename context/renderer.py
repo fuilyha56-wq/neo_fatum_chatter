@@ -47,6 +47,7 @@ class ContextRenderer:
         plan: InitialContextPlan,
         mental_log: Any,
         serialized_chain_payloads: list[dict[str, Any]],
+        session: Any | None = None,
         build_system_prompt_fn: Callable[
             [ChatStream, dict[str, Any] | None], Awaitable[str]
         ]
@@ -76,10 +77,12 @@ class ContextRenderer:
             payloads.append(summary_payload)
 
         chain_payloads = restore_history_chain_payloads(serialized_chain_payloads)
-        history_text = fused_narrative_builder(
-            chat_stream,
-            mental_log,
+        history_text = self._get_or_build_frozen_narrative(
+            chat_stream=chat_stream,
+            mental_log=mental_log,
             before_ts=plan.history_before_ts,
+            session=session,
+            fused_narrative_builder=fused_narrative_builder,
         )
         if history_text:
             payloads.append(LLMPayload(ROLE.USER, Text(history_text)))
@@ -213,6 +216,36 @@ class ContextRenderer:
     ) -> list[LLMPayload]:
         """从序列化的 USER/ASSISTANT pair 恢复 payload。"""
         return restore_history_chain_payloads(serialized_chain_payloads)
+
+    def _get_or_build_frozen_narrative(
+        self,
+        *,
+        chat_stream: ChatStream,
+        mental_log: Any,
+        before_ts: float | None,
+        session: Any | None,
+        fused_narrative_builder: Callable[[ChatStream, Any, float | None], str],
+    ) -> str:
+        """复用或生成融合叙事。
+
+        KFC 会在 Wait/Stop 后跨 execute() 重建 payload。若每次都重新扫描
+        MentalLog 与历史消息，叙事尾部可能随运行时状态发生细微变化，从而破坏
+        LLM 服务端 prompt prefix cache。这里按 before_ts（即 chain_cutoff_ts）
+        冻结叙事文本，使相同截止点的重建得到字节级一致的前缀。
+        """
+        if session is None:
+            return fused_narrative_builder(chat_stream, mental_log, before_ts)
+
+        cutoff = float(before_ts or 0.0)
+        frozen = str(getattr(session, "frozen_narrative", "") or "")
+        frozen_cutoff = float(getattr(session, "frozen_narrative_cutoff_ts", 0.0) or 0.0)
+        if frozen and frozen_cutoff == cutoff:
+            return frozen
+
+        history_text = fused_narrative_builder(chat_stream, mental_log, before_ts)
+        setattr(session, "frozen_narrative", history_text)
+        setattr(session, "frozen_narrative_cutoff_ts", cutoff)
+        return history_text
 
     @staticmethod
     def _render_contribution_text(contribution: ContextContribution) -> str:

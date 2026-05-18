@@ -1,6 +1,6 @@
 {
     "name": "kokoro_flow_chatter_lycoris_radiata",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "description": "KokoroFlow 对话引擎 — 基于心理活动流的私聊特化聊天器",
     "author": "Lycoris",
     "dependencies": {

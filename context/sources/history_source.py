@@ -31,11 +31,14 @@ def build_history_summary_payload(
 def build_current_time_payload(
     now: datetime.datetime | None = None,
 ) -> LLMPayload:
-    """在无可用历史时渲染当前时间 payload。"""
+    """在无可用历史时渲染当前日期 payload。
+
+    仅保留日期，避免分钟级时间漂移破坏 LLM prompt prefix cache。
+    """
     current = now or datetime.datetime.now()
     return LLMPayload(
         ROLE.USER,
-        Text(f"当前时间：{current.strftime('%Y-%m-%d %H:%M')}")
+        Text(f"当前日期：{current.strftime('%Y-%m-%d')}")
     )
 
 

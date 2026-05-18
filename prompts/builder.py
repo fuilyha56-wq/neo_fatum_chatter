@@ -63,6 +63,7 @@ class KFCPromptBuilder:
             chat_stream=chat_stream,
             plan=plan,
             mental_log=getattr(session, "mental_log", None),
+            session=session,
             serialized_chain_payloads=list(getattr(session, "chain_payloads", []) or []),
             build_system_prompt_fn=self.build_system_prompt,
             build_fused_narrative_fn=self.build_fused_narrative,

@@ -223,6 +223,10 @@ class KokoroFlowChatter(BaseChatter):
         for payload in initial_payloads:
             request.add_payload(payload)
 
+        # build_initial_payloads 可能会刷新 session.frozen_narrative，立即持久化，
+        # 让 Wait/Stop 后的新 execute() 也能复用字节级一致的融合叙事。
+        await self._save_session(session)
+
         # 图片预算初始化（bot 已发图片 > 用户新消息图片 > 历史补充，共用同一总配额）
         image_budget: ImageBudget | None = None
         if config.general.native_multimodal:

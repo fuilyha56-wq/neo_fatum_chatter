@@ -54,6 +54,11 @@ class KFCSession:
     chain_payloads: list[dict[str, Any]] = field(default_factory=list)
     chain_cutoff_ts: float = 0.0
 
+    # 融合叙事冻结缓存：跨 execute() 重建时复用字节级一致的历史叙事，
+    # 以提升 LLM prompt prefix cache 命中率。cutoff 与 chain_cutoff_ts 对齐。
+    frozen_narrative: str = ""
+    frozen_narrative_cutoff_ts: float = 0.0
+
     # 近期记忆摘要（滚动压缩，替换式）：覆盖最近 compress_days_window 天的对话。
     # 由主聊天模型异步生成，以第一人称书写，重启后持久保留。
     history_summary: str = ""
@@ -179,10 +184,17 @@ class KFCSession:
                     self.chain_cutoff_ts = float(ts)
                 break
 
+        # 对话链推进或裁剪后，融合叙事截止点已变化，旧冻结缓存不再可靠。
+        if self.frozen_narrative_cutoff_ts != self.chain_cutoff_ts:
+            self.frozen_narrative = ""
+            self.frozen_narrative_cutoff_ts = 0.0
+
     def clear_chain(self) -> None:
         """清空持久化对话链（重置上下文）。"""
         self.chain_payloads = []
         self.chain_cutoff_ts = 0.0
+        self.frozen_narrative = ""
+        self.frozen_narrative_cutoff_ts = 0.0
 
     def add_interrupt_event(self, interrupt_msgs: list[Any]) -> MentalLogEntry:
         """记录用户打断事件到活动流。
@@ -231,6 +243,8 @@ class KFCSession:
             "total_interactions": self.total_interactions,
             "chain_payloads": self.chain_payloads,
             "chain_cutoff_ts": self.chain_cutoff_ts,
+            "frozen_narrative": self.frozen_narrative,
+            "frozen_narrative_cutoff_ts": self.frozen_narrative_cutoff_ts,
             "history_summary": self.history_summary,
             "last_compress_at": self.last_compress_at,
             "compress_round_count": self.compress_round_count,
@@ -270,6 +284,10 @@ class KFCSession:
         # 持久化对话链
         session.chain_payloads = data.get("chain_payloads", [])
         session.chain_cutoff_ts = float(data.get("chain_cutoff_ts", 0.0))
+        session.frozen_narrative = str(data.get("frozen_narrative", "") or "")
+        session.frozen_narrative_cutoff_ts = float(
+            data.get("frozen_narrative_cutoff_ts", 0.0) or 0.0
+        )
         # 近期记忆摘要
         session.history_summary = data.get("history_summary", "")
         session.last_compress_at = float(data.get("last_compress_at", 0.0))

@@ -40,7 +40,10 @@ def build_initial_context_plan(
 
     sched_at = getattr(session, "scheduled_proactive_at", None)
     if sched_at:
-        remaining_min = max(0.0, (sched_at - time.time()) / 60)
+        # 注意：此处刻意只渲染绝对时间（HH:MM），不再附加"约 X 分钟后"的相对差值。
+        # 原因：相对分钟数随当前时间漂移，会逐分钟改写 system prompt 前缀，
+        # 破坏 LLM 服务端 prompt prefix cache 的命中。模型可结合 history payload
+        # 中的当前时间自行推算差值。
         sched_time_str = datetime.fromtimestamp(sched_at).strftime("%H:%M")
         sched_reason = str(
             getattr(session, "scheduled_proactive_reason", "") or ""
@@ -48,7 +51,7 @@ def build_initial_context_plan(
         reason_text = f"，理由：{sched_reason}" if sched_reason else ""
         dynamic_sections.append(
             f"# 当前预约状态\n"
-            f"你已预约在 **{sched_time_str}**（约 {remaining_min:.0f} 分钟后）主动发起{reason_text}。\n"
+            f"你已预约在 **{sched_time_str}** 主动发起{reason_text}。\n"
             "如需修改，可重新调用 `schedule_proactive` 工具（新预约会覆盖旧的；传 delay_minutes=0 可取消预约）。"
         )
 
