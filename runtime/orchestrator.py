@@ -303,7 +303,7 @@ async def execute_orchestrator(
                             visible_reply_segments=[fallback_text],
                             has_reply_action=True,
                             has_meaningful_action=True,
-                            actions=[{"type": "NFC_reply", "content": [fallback_text]}],
+                            actions=[{"type": "nfc_reply", "content": [fallback_text]}],
                         )
                         turn_control = await commit_turn_decision(
                             self,

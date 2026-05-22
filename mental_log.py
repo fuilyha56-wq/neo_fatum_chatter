@@ -132,7 +132,7 @@ class MentalLog:
         for entry in reversed(self._entries):
             if entry.event_type == NFCEventType.BOT_PLANNING:
                 for action in entry.actions:
-                    if action.get("type") in ("NFC_reply", "respond"):
+                    if action.get("type") in ("nfc_reply", "respond"):
                         content = action.get("content", "")
                         if isinstance(content, list):
                             joined = " ".join(s for s in content if s)

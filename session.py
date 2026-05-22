@@ -339,7 +339,7 @@ class NFCSessionStore:
             from src.kernel.storage import JSONStore
 
             self._json_store = JSONStore(
-                storage_dir="data/kokoro_flow_chatter/sessions"
+                storage_dir="data/neo_fatum_chatter/sessions"
             )
             self._store_initialized = True
         except ImportError:
