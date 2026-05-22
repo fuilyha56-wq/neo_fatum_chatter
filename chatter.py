@@ -160,7 +160,7 @@ class NeoFatumChatter(BaseChatter):
                 name: str = schema.get("function", schema).get("name", "") or ""
             except Exception:
                 name = str(getattr(u, "name", "") or "")
-            # 归一化：兼容 "action-NFC_REPLY" / "action:NFC_REPLY" / "NFC_reply" 等格式
+            # 归一化：兼容 "action-nfc_reply" / "action:nfc_reply" / "nfc_reply" 等格式
             n = name.rsplit(":", 1)[-1]
             for prefix in ("action-", "tool-", "agent-"):
                 if n.startswith(prefix):

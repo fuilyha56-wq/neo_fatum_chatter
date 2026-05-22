@@ -161,7 +161,7 @@ def _extract_perception_draft(response: Any) -> str:
 
     当模型在感知阶段输出了纯文本后，系统会将其改写为
     <unsent_perception_draft> 格式存入 assistant payload。
-    此函数逆向提取该草稿的原始文本，用于在 NFC_REPLY content
+    此函数逆向提取该草稿的原始文本，用于在 nfc_reply content
     为空时作为兜底回填。
 
     Returns:
@@ -259,7 +259,7 @@ async def parse_tool_calls(
                 action_dict["content"] = [content] if content else []
 
             # ── 兜底：感知阶段草稿回填 ──
-            # 当模型在感知阶段已输出有效文本，但决策阶段调用 NFC_REPLY 时
+            # 当模型在感知阶段已输出有效文本，但决策阶段调用 nfc_reply 时
             # content 为空（模型误以为感知文本已发送），从 response 链中
             # 提取草稿文本作为实际发送内容。
             raw_content = action_dict.get("content")
@@ -272,7 +272,7 @@ async def parse_tool_calls(
                 draft_text = _extract_perception_draft(response)
                 if draft_text:
                     logger.info(
-                        f"[NFC] NFC_REPLY content 为空，回填感知阶段草稿: "
+                        f"[NFC] nfc_reply content 为空，回填感知阶段草稿: "
                         f"{draft_text[:80]}{'...' if len(draft_text) > 80 else ''}"
                     )
                     action_dict["content"] = [draft_text]
