@@ -14,6 +14,8 @@ from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.api.send_api import send_text
 from src.app.plugin_system.base import BaseAction
 
+from ..protocol.response_normalizer import strip_thinking_blocks
+
 logger = get_logger("NFC_reply")
 
 # 元数据关键字模式（最后防线）
@@ -109,6 +111,18 @@ class NFCReplyAction(BaseAction):
 
         sent_count = 0
         for segment in segments:
+            # 最后防线：剥离 thinking 块泄漏（DeepSeek V4 Pro Thinking 等模型偶尔会
+            # 把 <think>/<thinking> 块直接吐到正文里）
+            cleaned_segment = strip_thinking_blocks(segment)
+            if cleaned_segment != segment:
+                logger.warning(
+                    f"[最后防线] 检测到 content 中混入 thinking 块，已剥离。"
+                    f"原始长度={len(segment)}，剥离后={len(cleaned_segment)}"
+                )
+                segment = cleaned_segment
+                if not segment:
+                    continue
+
             keyword_matches = [p.search(segment) for p in _METADATA_PATTERNS]
             hit_count = sum(1 for m in keyword_matches if m is not None)
             if hit_count >= 2:
