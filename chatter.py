@@ -1,4 +1,4 @@
-"""KokoroFlowChatter 核心聊天器。
+﻿"""NeoFatumChatter 核心聊天器。
 
 实现完整的心理活动流对话循环：
 1. 构建 LLM 上下文（系统提示 + 活动流 + 未读消息）
@@ -32,36 +32,36 @@ from src.core.components.types import ChatType
 from src.kernel.concurrency import get_watchdog
 from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, Text
 
-from .debug.log_formatter import format_prompt_for_log, log_kfc_result
+from .debug.log_formatter import format_prompt_for_log, log_nfc_result
 from .services.context_sanitizer import prepare_payload_chain_for_send
 from .protocol.compat_adapter import (
     build_tool_call_compat_retry_prompt,
     is_deepseek_model_set,
-    prepare_kfc_model_set,
+    prepare_nfc_model_set,
     rewrite_response_as_unsent_draft,
 )
 from .protocol.decision_parser import parse_response_decision
 from .protocol.response_normalizer import normalize_response
-from .models import KFC_REPLY, DO_NOTHING
+from .models import NFC_REPLY, DO_NOTHING
 from .prompts.templates import (
-    KFC_PERCEIVE_FOLLOWUP_PROMPT_TOOL_CALLING,
+    NFC_PERCEIVE_FOLLOWUP_PROMPT_TOOL_CALLING,
 )
 
 if TYPE_CHECKING:
     from src.core.models.stream import ChatStream
     from src.app.plugin_system.api.llm_api import ToolRegistry
 
-    from .config import KFCConfig
+    from .config import NFCConfig
     from .multimodal import ImageBudget
-    from .prompts.builder import KFCPromptBuilder
-    from .session import KFCSession, KFCSessionStore
+    from .prompts.builder import NFCPromptBuilder
+    from .session import NFCSession, NFCSessionStore
 
-logger = get_logger("kfc_chatter")
+logger = get_logger("NFC_chatter")
 
 
 
-class KokoroFlowChatter(BaseChatter):
-    """KokoroFlowChatter 核心聊天器。
+class NeoFatumChatter(BaseChatter):
+    """NeoFatumChatter 核心聊天器。
 
     基于心理活动流的对话模型：
     - 维护 LLMResponse 链贯穿整个 execute() 生命周期
@@ -80,18 +80,18 @@ class KokoroFlowChatter(BaseChatter):
 
     # ── 配置与会话辅助 ──────────────────────────────────────
 
-    def _get_config(self) -> KFCConfig:
-        """获取 KFC 配置。"""
-        from .config import KFCConfig
-        from .plugin import KFCPlugin
+    def _get_config(self) -> NFCConfig:
+        """获取 NFC 配置。"""
+        from .config import NFCConfig
+        from .plugin import NFCPlugin
 
-        if isinstance(self.plugin, KFCPlugin) and isinstance(self.plugin.config, KFCConfig):
+        if isinstance(self.plugin, NFCPlugin) and isinstance(self.plugin.config, NFCConfig):
             return self.plugin.config
-        return KFCConfig()
+        return NFCConfig()
 
     @staticmethod
     def format_message_line(msg: Any, time_format: str = "%Y-%m-%d %H:%M:%S") -> str:  # type: ignore[override]
-        """将单条消息格式化为带标签的显示行（KFC 层覆盖）。
+        """将单条消息格式化为带标签的显示行（NFC 层覆盖）。
 
         格式：》时间》[QQ:xxx] 昵称 [\u6d88\u606fid:xxx]\uff1a \u5185\u5bb9
         两种括号将意義明确区分，避免模型将 QQ 号与消息 ID 混淡。
@@ -126,19 +126,19 @@ class KokoroFlowChatter(BaseChatter):
         content = getattr(msg, "processed_plain_text", None) or str(getattr(msg, "content", ""))
         return f"》{time_str}》{role_part}{id_part}{name_part} {msg_id_part}： {content}"
 
-    async def _get_session(self) -> KFCSession:
+    async def _get_session(self) -> NFCSession:
         """获取当前 stream 的 Session（持有 per-stream 锁）。"""
         session_store = self._get_session_store()
         async with session_store.lock(self.stream_id):
             return await session_store.get_or_create(self.stream_id)
 
-    def _get_session_store(self) -> KFCSessionStore:
+    def _get_session_store(self) -> NFCSessionStore:
         """获取 Session Store（由 plugin.__init__ 初始化）。"""
         return self.plugin._session_store  # type: ignore[attr-defined]
 
     async def _accumulate_messages(
         self,
-        config: KFCConfig,
+        config: NFCConfig,
     ) -> tuple[str, list[Any]]:
         """在积累窗口内等待并聚合连发消息。"""
         from .runtime import accumulate_message_buffer
@@ -146,12 +146,12 @@ class KokoroFlowChatter(BaseChatter):
         return await accumulate_message_buffer(self, config)
 
     async def modify_llm_usables(self, llm_usables: list[Any]) -> list[Any]:  # type: ignore[override]
-        """过滤掉不需要的工具，保留 KFC 的正式 tool-calling 主链。"""
+        """过滤掉不需要的工具，保留 NFC 的正式 tool-calling 主链。"""
         config = self._get_config()
         _blocked = frozenset(
             name
             for name in config.general.blocked_tools
-            if name not in {KFC_REPLY, DO_NOTHING}
+            if name not in {NFC_REPLY, DO_NOTHING}
         )
 
         def _is_reply_tool(u: Any) -> bool:
@@ -160,7 +160,7 @@ class KokoroFlowChatter(BaseChatter):
                 name: str = schema.get("function", schema).get("name", "") or ""
             except Exception:
                 name = str(getattr(u, "name", "") or "")
-            # 归一化：兼容 "action-kfc_reply" / "action:kfc_reply" / "kfc_reply" 等格式
+            # 归一化：兼容 "action-NFC_REPLY" / "action:NFC_REPLY" / "NFC_reply" 等格式
             n = name.rsplit(":", 1)[-1]
             for prefix in ("action-", "tool-", "agent-"):
                 if n.startswith(prefix):
@@ -184,10 +184,10 @@ class KokoroFlowChatter(BaseChatter):
     async def _build_initial_context(
         self,
         chat_stream: ChatStream,
-        config: KFCConfig,
-        session: KFCSession,
+        config: NFCConfig,
+        session: NFCSession,
         model_set: Any,
-    ) -> tuple[Any, ImageBudget | None, ToolRegistry, KFCPromptBuilder, bool]:
+    ) -> tuple[Any, ImageBudget | None, ToolRegistry, NFCPromptBuilder, bool]:
         """构建初始 LLM 上下文（系统提示 + 工具注册 + 图片预算）。
 
         组装 LLM 请求所需的全部初始 payload：系统提示词、人物关系、
@@ -195,7 +195,7 @@ class KokoroFlowChatter(BaseChatter):
 
         Args:
             chat_stream: 当前聊天流
-            config: KFC 配置
+            config: NFC 配置
             session: 当前会话状态
             model_set: LLM 模型配置
 
@@ -205,15 +205,15 @@ class KokoroFlowChatter(BaseChatter):
         context_manager = LLMContextManager()
         request = create_llm_request(
             model_set,
-            "kokoro_flow_chatter",
+            "neo_fatum_chatter",
             context_manager=context_manager,
             with_reminder="actor",
         )
 
         # 系统提示词
-        from .prompts.builder import KFCPromptBuilder
+        from .prompts.builder import NFCPromptBuilder
 
-        prompt_builder = KFCPromptBuilder()
+        prompt_builder = NFCPromptBuilder()
 
         initial_payloads, has_history = await prompt_builder.build_initial_payloads(
             chat_stream,
@@ -290,9 +290,9 @@ class KokoroFlowChatter(BaseChatter):
 
             normalized = normalize_response(new_response)
             if normalized.used_reasoning_content and not normalized.has_tool_calls:
-                logger.debug("[KFC] 响应 content 为空，回退使用 reasoning_content")
+                logger.debug("[NFC] 响应 content 为空，回退使用 reasoning_content")
             if normalized.used_compat_tool_calls:
-                logger.debug("[KFC] 从正文 compat JSON 成功解析工具调用")
+                logger.debug("[NFC] 从正文 compat JSON 成功解析工具调用")
 
             # LLM 请求完成后再次喂狗
             watchdog.feed_dog(self.stream_id)
@@ -310,17 +310,17 @@ class KokoroFlowChatter(BaseChatter):
                     f"{perceive_text[:80]}{'...' if len(perceive_text) > 80 else ''}"
                 )
                 if not rewrite_response_as_unsent_draft(new_response, perceive_text):
-                    logger.debug("[KFC] 未能将纯文本响应改写为未发送草稿，保留原始上下文")
+                    logger.debug("[NFC] 未能将纯文本响应改写为未发送草稿，保留原始上下文")
 
                 # 注入轻量提示，引导模型基于“未发送草稿”进入决策阶段。
                 followup = None
                 if is_deepseek_model_set(getattr(new_response, "model_set", None)):
                     followup = build_tool_call_compat_retry_prompt(new_response.payloads)
                     if followup:
-                        logger.debug("[KFC] DeepSeek 纯文本重试使用 compat JSON 提示")
+                        logger.debug("[NFC] DeepSeek 纯文本重试使用 compat JSON 提示")
 
                 if not followup:
-                    followup = KFC_PERCEIVE_FOLLOWUP_PROMPT_TOOL_CALLING
+                    followup = NFC_PERCEIVE_FOLLOWUP_PROMPT_TOOL_CALLING
                 new_response.add_payload(
                     LLMPayload(ROLE.USER, Text(followup))
                 )
@@ -335,7 +335,7 @@ class KokoroFlowChatter(BaseChatter):
     async def _send_interruptable(
         self,
         response: Any,
-        config: KFCConfig,
+        config: NFCConfig,
         known_unread_ids: frozenset[str],
     ) -> tuple[Any | None, list[Any]]:
         """以可打断方式发送 LLM 请求。"""
@@ -353,7 +353,7 @@ class KokoroFlowChatter(BaseChatter):
     async def _execute_reply(
         self,
         content: str,
-        config: KFCConfig,
+        config: NFCConfig,
         trigger_msg: Any | None = None,
         reply_to: str = "",
     ) -> bool:
@@ -361,14 +361,14 @@ class KokoroFlowChatter(BaseChatter):
 
         Args:
             content: 回复文本内容
-            config: KFC 配置
+            config: NFC 配置
             trigger_msg: 触发消息，为 None 时构造虚拟消息
             reply_to: 要引用的消息 ID（可选）
 
         Returns:
             bool: 是否发送成功
         """
-        from .actions.reply import KFCReplyAction
+        from .actions.reply import NFCReplyAction
 
         if trigger_msg is None:
             trigger_msg = await self._get_virtual_trigger_message()
@@ -380,10 +380,10 @@ class KokoroFlowChatter(BaseChatter):
             kwargs: dict[str, Any] = {"content": content}
             if reply_to:
                 kwargs["reply_to"] = reply_to
-            await self.exec_llm_usable(KFCReplyAction, trigger_msg, **kwargs)
+            await self.exec_llm_usable(NFCReplyAction, trigger_msg, **kwargs)
             return True
         except Exception as e:
-            logger.error(f"通过框架执行 KFCReplyAction 失败: {e}", exc_info=True)
+            logger.error(f"通过框架执行 NFCReplyAction 失败: {e}", exc_info=True)
             return False
 
     # ── 辅助方法 ────────────────────────────────────────────
@@ -391,9 +391,9 @@ class KokoroFlowChatter(BaseChatter):
     def _register_vlm_skip(self) -> None:
         """为当前聊天流注册 VLM 跳过。
 
-        在 native_multimodal 模式下，KFC 直接将原始图片数据打包进
+        在 native_multimodal 模式下，NFC 直接将原始图片数据打包进
         LLM payload，由主模型理解图片内容。框架的 VLM 管线会将图片
-        转述为文本描述，这对 KFC 是冗余操作。
+        转述为文本描述，这对 NFC 是冗余操作。
 
         此方法在 execute() 开头调用，确保后续到达的消息不再触发 VLM。
         调用是幂等的——多次注册同一 stream_id 不会产生副作用。
@@ -539,14 +539,14 @@ class KokoroFlowChatter(BaseChatter):
     def _extract_media(
         self,
         unread_msgs: list[Any],
-        config: KFCConfig,
+        config: NFCConfig,
         image_budget: Any | None = None,
     ) -> list[Any] | None:
         """从未读消息中提取多模态图片数据。
 
         Args:
             unread_msgs: 未读消息列表
-            config: KFC 配置
+            config: NFC 配置
             image_budget: 图片预算追踪器，为 None 时使用 max_images_per_payload
 
         Returns:
@@ -606,7 +606,7 @@ class KokoroFlowChatter(BaseChatter):
             processed_plain_text="[超时触发]",
         )
 
-    async def _save_session(self, session: KFCSession) -> None:
+    async def _save_session(self, session: NFCSession) -> None:
         """保存 Session（持有 per-stream 锁）。"""
         store = self._get_session_store()
         async with store.lock(session.stream_id):
@@ -624,18 +624,18 @@ class KokoroFlowChatter(BaseChatter):
         return time.time()
 
     @staticmethod
-    def _record_reply_timing(session: KFCSession) -> None:
+    def _record_reply_timing(session: NFCSession) -> None:
         """记录回复时效到活动流。"""
         from .mental_log import MentalLogEntry
-        from .models import KFCEventType
+        from .models import NFCEventType
 
         elapsed = session.waiting_config.get_elapsed_seconds()
         max_wait = session.waiting_config.max_wait_seconds
 
         if elapsed <= max_wait:
-            event_type = KFCEventType.REPLY_IN_TIME
+            event_type = NFCEventType.REPLY_IN_TIME
         else:
-            event_type = KFCEventType.REPLY_LATE
+            event_type = NFCEventType.REPLY_LATE
 
         entry = MentalLogEntry(
             event_type=event_type,
@@ -651,6 +651,6 @@ class KokoroFlowChatter(BaseChatter):
         prompt_text = format_prompt_for_log(response)
         logger.print_panel(
             prompt_text,
-            title=f"KFC 提示词 (stream={self.stream_id[:8]})",
+            title=f"NFC 提示词 (stream={self.stream_id[:8]})",
             border_style="cyan",
         )

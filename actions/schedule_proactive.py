@@ -1,4 +1,4 @@
-"""ScheduleProactive 动作。
+﻿"""ScheduleProactive 动作。
 
 允许 LLM 预约下一次主动思考的时间。
 预约存在时，条件主动发起逻辑暂停，直到预约时间到达。
@@ -12,7 +12,7 @@ from typing import Annotated, ClassVar
 from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.base import BaseAction
 
-logger = get_logger("kfc_schedule_proactive")
+logger = get_logger("NFC_schedule_proactive")
 
 # 工具基础描述（固定，不可配置）
 _BASE_DESCRIPTION = (

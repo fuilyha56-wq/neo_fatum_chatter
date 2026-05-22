@@ -1,9 +1,9 @@
-"""KFC 近期记忆压缩模块。
+﻿"""NFC 近期记忆压缩模块。
 
 异步生成"近期记忆摘要"（history_summary），覆盖最近 N 天的对话。
 使用 actor 模型任务（config.general.model_task），以完整人设 + 第一人称书写，直接替换旧摘要。
 
-压缩时机由 KFCChatter 在每轮对话结束后检查并触发（见 chatter.py）。
+压缩时机由 NFCChatter 在每轮对话结束后检查并触发（见 chatter.py）。
 """
 
 from __future__ import annotations
@@ -17,19 +17,19 @@ from src.app.plugin_system.api.stream_api import get_stream_messages
 from src.kernel.llm import LLMPayload, LLMRequest, ROLE, Text
 
 if TYPE_CHECKING:
-    from .config import KFCConfig
-    from .session import KFCSession
-    from .prompts.builder import KFCPromptBuilder
+    from .config import NFCConfig
+    from .session import NFCSession
+    from .prompts.builder import NFCPromptBuilder
 
 from src.app.plugin_system.api.llm_api import get_model_set_by_task
 
-logger = get_logger("kfc_compressor")
+logger = get_logger("NFC_compressor")
 
 
 async def compress_history(
-    session: "KFCSession",
-    prompt_builder: "KFCPromptBuilder",
-    config: "KFCConfig",
+    session: "NFCSession",
+    prompt_builder: "NFCPromptBuilder",
+    config: "NFCConfig",
     chat_stream: Any,
 ) -> None:
     """对最近 N 天的对话生成近期记忆摘要，更新 session.history_summary。
@@ -39,9 +39,9 @@ async def compress_history(
     使用 config.general.model_task 对应的 actor 模型，避免继承对话 model_set 的 max_tokens 限制。
 
     Args:
-        session: 当前用户的 KFCSession（会被直接修改）
-        prompt_builder: KFC prompt 构建器（用于获取 system_prompt）
-        config: KFC 配置
+        session: 当前用户的 NFCSession（会被直接修改）
+        prompt_builder: NFC prompt 构建器（用于获取 system_prompt）
+        config: NFC 配置
         chat_stream: 当前聊天流（用于 system_prompt 构建）
     """
     # 立即标记压缩时间，防止异步并发重复触发
@@ -57,14 +57,14 @@ async def compress_history(
     try:
         all_msgs = await get_stream_messages(stream_id=stream_id, limit=_FETCH_LIMIT)
     except Exception as exc:
-        logger.warning(f"[KFC] 压缩：读取 DB 消息失败：{exc}")
+        logger.warning(f"[NFC] 压缩：读取 DB 消息失败：{exc}")
         return
 
     # 过滤到时间窗口内
     window_msgs = [m for m in all_msgs if _msg_time(m) >= since_ts]
 
     if not window_msgs:
-        logger.debug(f"[KFC] 压缩：流 {stream_id} 最近 {days} 天无消息，跳过")
+        logger.debug(f"[NFC] 压缩：流 {stream_id} 最近 {days} 天无消息，跳过")
         return
 
     # ── 2. 格式化消息文本（同 fused_narrative 格式）──
@@ -88,7 +88,7 @@ async def compress_history(
 
         is_bot = bool(
             (bot_id and sender_id == bot_id)
-            or message_id.startswith("action_kfc_reply")
+            or message_id.startswith("action_nfc_reply")
         )
         if is_bot:
             formatted_lines.append(f"[{time_str}] 你回复：{text}")
@@ -96,7 +96,7 @@ async def compress_history(
             formatted_lines.append(f"[{time_str}] {sender}说：{text}")
 
     if not formatted_lines:
-        logger.debug(f"[KFC] 压缩：流 {stream_id} 格式化后无有效内容，跳过")
+        logger.debug(f"[NFC] 压缩：流 {stream_id} 格式化后无有效内容，跳过")
         return
 
     # 同时从 mental_log 中加入内心活动（BOT_PLANNING 的 thought）
@@ -116,7 +116,7 @@ async def compress_history(
     try:
         system_prompt = await prompt_builder.build_system_prompt(chat_stream)
     except Exception as exc:
-        logger.warning(f"[KFC] 压缩：构建 system_prompt 失败：{exc}")
+        logger.warning(f"[NFC] 压缩：构建 system_prompt 失败：{exc}")
         return
 
     compress_instruction = (
@@ -137,7 +137,7 @@ async def compress_history(
 
     # 直接使用 actor 模型任务，避免继承对话 model_set 的 max_tokens 限制
     model_set = get_model_set_by_task(config.general.model_task)
-    llm_request = LLMRequest(model_set, f"kfc_compress_{stream_id}")
+    llm_request = LLMRequest(model_set, f"NFC_compress_{stream_id}")
     llm_request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_prompt)))
     if actor_reminder:
         llm_request.add_payload(LLMPayload(ROLE.SYSTEM, Text(actor_reminder)))
@@ -148,11 +148,11 @@ async def compress_history(
         llm_response = await llm_request.send()
         summary = (await llm_response or "").strip()
     except Exception as exc:
-        logger.warning(f"[KFC] 压缩：LLM 调用失败：{exc}")
+        logger.warning(f"[NFC] 压缩：LLM 调用失败：{exc}")
         return
 
     if not summary:
-        logger.warning(f"[KFC] 压缩：LLM 返回空摘要，跳过")
+        logger.warning(f"[NFC] 压缩：LLM 返回空摘要，跳过")
         return
 
     # ── 5. 更新 session（直接替换）──
@@ -160,18 +160,18 @@ async def compress_history(
     session.last_compress_at = time.time()
     session.compress_round_count = 0
     logger.info(
-        f"[KFC] 近期记忆压缩完成：流 {stream_id}，"
+        f"[NFC] 近期记忆压缩完成：流 {stream_id}，"
         f"覆盖 {len(formatted_lines)} 条消息，"
         f"摘要 {len(summary)} 字"
     )
 
 
-def should_compress(session: "KFCSession", config: "KFCConfig") -> bool:
+def should_compress(session: "NFCSession", config: "NFCConfig") -> bool:
     """判断是否应触发压缩。
 
     Args:
-        session: 当前 KFCSession
-        config: KFC 配置
+        session: 当前 NFCSession
+        config: NFC 配置
 
     Returns:
         bool: 是否应触发压缩
@@ -200,11 +200,11 @@ def _msg_time(msg: Any) -> float:
 
 def _merge_mental_log(
     lines: list[str],
-    session: "KFCSession",
+    session: "NFCSession",
     since_ts: float,
 ) -> None:
     """将 mental_log 中的 BOT_PLANNING thought 合并入 lines。"""
-    from .models import KFCEventType
+    from .models import NFCEventType
 
     mental_log = getattr(session, "mental_log", None)
     if not mental_log:
@@ -213,7 +213,7 @@ def _merge_mental_log(
     for entry in mental_log.entries:
         if entry.timestamp < since_ts:
             continue
-        if entry.event_type != KFCEventType.BOT_PLANNING or not entry.thought:
+        if entry.event_type != NFCEventType.BOT_PLANNING or not entry.thought:
             continue
         try:
             time_str = datetime.datetime.fromtimestamp(entry.timestamp).strftime(

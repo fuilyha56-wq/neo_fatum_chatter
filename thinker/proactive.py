@@ -1,4 +1,4 @@
-"""主动发起模块。
+﻿"""主动发起模块。
 
 ProactiveThinker 负责在长时间沉默后评估是否主动发起对话。
 通过 Scheduler 定期调度。
@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING
 from src.app.plugin_system.api.log_api import get_logger
 
 if TYPE_CHECKING:
-    from ..config import KFCConfig
-    from ..session import KFCSession, KFCSessionStore
+    from ..config import NFCConfig
+    from ..session import NFCSession, NFCSessionStore
 
-logger = get_logger("kfc_proactive")
+logger = get_logger("NFC_proactive")
 
 
 class ProactiveThinker:
@@ -28,8 +28,8 @@ class ProactiveThinker:
 
     def __init__(
         self,
-        config: KFCConfig,
-        session_store: KFCSessionStore,
+        config: NFCConfig,
+        session_store: NFCSessionStore,
     ) -> None:
         self._config = config
         self._session_store = session_store
@@ -67,7 +67,7 @@ class ProactiveThinker:
 
         return triggered
 
-    async def _check_and_trigger(self, stream_id: str, session: KFCSession) -> bool:
+    async def _check_and_trigger(self, stream_id: str, session: NFCSession) -> bool:
         """检查单个 session 是否应触发，处理过期预约的持久化清除。"""
         now = time.time()
         if session.scheduled_proactive_at is not None:
@@ -78,13 +78,13 @@ class ProactiveThinker:
 
         return self._should_trigger(session)
 
-    def _should_trigger(self, session: KFCSession) -> bool:
+    def _should_trigger(self, session: NFCSession) -> bool:
         """判断无预约情况下是否应主动发起（沉默条件 + 概率）。
 
         勿扰时段只在本路径（沉默触发）中检查，模型预约不受此限制。
 
         Args:
-            session: KFC 会话对象
+            session: NFC 会话对象
         """
         # 勿扰时段：仅拦截沉默触发，不影响模型预约
         if self._is_quiet_hours():

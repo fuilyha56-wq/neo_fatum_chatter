@@ -1,4 +1,4 @@
-"""KFC 场景状态 source。"""
+﻿"""NFC 场景状态 source。"""
 
 from __future__ import annotations
 

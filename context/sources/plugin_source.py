@@ -1,4 +1,4 @@
-"""KFC 第三方上下文贡献接入点。"""
+﻿"""NFC 第三方上下文贡献接入点。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from src.app.plugin_system.api.log_api import get_logger
 from ..types import ContextContribution, ContextOwner, ContextScope
 
 
-logger = get_logger("kfc_context_plugin_source")
+logger = get_logger("NFC_context_plugin_source")
 
 _VALID_CONTEXT_OWNERS = frozenset(get_args(ContextOwner))
 _VALID_CONTEXT_SCOPES = frozenset(get_args(ContextScope))

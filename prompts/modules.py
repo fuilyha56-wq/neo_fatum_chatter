@@ -1,4 +1,4 @@
-"""KFC 提示词模块函数。
+﻿"""NFC 提示词模块函数。
 
 提供基于 PromptManager 的模板注入和上下文构建辅助函数。
 """
@@ -11,16 +11,16 @@ from src.core.config import get_core_config
 from src.core.prompt import get_prompt_manager, optional, wrap, min_len
 
 from .templates import (
-    KFC_SYSTEM_PROMPT,
-    KFC_PROACTIVE_PROMPT,
-    KFC_TIMEOUT_PROMPT,
-    KFC_PROACTIVE_DECISION_TOOL_CALLING,
-    KFC_REPLY_MODE_TOOL_CALLING,
+    NFC_SYSTEM_PROMPT,
+    NFC_PROACTIVE_PROMPT,
+    NFC_TIMEOUT_PROMPT,
+    NFC_PROACTIVE_DECISION_TOOL_CALLING,
+    NFC_REPLY_MODE_TOOL_CALLING,
 )
 
 
-def register_kfc_prompts() -> None:
-    """注册 KFC 所有提示词模板到 PromptManager。
+def register_nfc_prompts() -> None:
+    """注册 NFC 所有提示词模板到 PromptManager。
 
     在 plugin.on_plugin_loaded() 中调用一次即可。
     """
@@ -31,8 +31,8 @@ def register_kfc_prompts() -> None:
 
     # 主系统提示词
     pm.get_or_create(
-        name="kfc_system_prompt",
-        template=KFC_SYSTEM_PROMPT,
+        name="NFC_system_prompt",
+        template=NFC_SYSTEM_PROMPT,
         policies={
             "nickname": optional(personality.nickname),
             "alias_names": optional("、".join(personality.alias_names)),
@@ -63,7 +63,7 @@ def register_kfc_prompts() -> None:
             "custom_decision_prompt": optional(""),
             "scene_state_info": optional(""),
             # reply_mode_instruction 由 _build_initial_context 动态注入，此处提供 tool calling 兜底
-            "reply_mode_instruction": optional(KFC_REPLY_MODE_TOOL_CALLING),
+            "reply_mode_instruction": optional(NFC_REPLY_MODE_TOOL_CALLING),
             "current_time": optional(
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ),
@@ -72,8 +72,8 @@ def register_kfc_prompts() -> None:
 
     # 主动发起提示词
     pm.get_or_create(
-        name="kfc_proactive_prompt",
-        template=KFC_PROACTIVE_PROMPT,
+        name="NFC_proactive_prompt",
+        template=NFC_PROACTIVE_PROMPT,
         policies={
             "current_time": optional(
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -100,7 +100,7 @@ async def build_proactive_context(
 ) -> str:
     """构建主动发起上下文。"""
     pm = get_prompt_manager()
-    tmpl = pm.get_template("kfc_proactive_prompt")
+    tmpl = pm.get_template("NFC_proactive_prompt")
     if not tmpl:
         return f"已沉默 {silence_minutes:.0f} 分钟"
 
@@ -112,7 +112,7 @@ async def build_proactive_context(
         silence_str = f"{silence_minutes:.0f} 分钟"
 
     _ = use_tool_calling
-    decision_instruction = KFC_PROACTIVE_DECISION_TOOL_CALLING
+    decision_instruction = NFC_PROACTIVE_DECISION_TOOL_CALLING
 
     result = await (
         tmpl.clone()
@@ -190,17 +190,17 @@ def build_timeout_context(
         )
     elif is_first:
         decision_instructions = (
-            "可以调用 `kfc_reply(...)` 发送消息，"
+            "可以调用 `nfc_reply(...)` 发送消息，"
             "或调用 `do_nothing(max_wait_seconds>0)` 继续等待，"
             "或调用 `do_nothing(max_wait_seconds=0)` 结束等待。"
         )
     else:
         decision_instructions = (
-            "如果确实有话说，可以调用 `kfc_reply(...)` 发送消息；"
+            "如果确实有话说，可以调用 `nfc_reply(...)` 发送消息；"
             "或调用 `do_nothing(max_wait_seconds=0)` 结束等待。"
         )
 
-    return KFC_TIMEOUT_PROMPT.format(
+    return NFC_TIMEOUT_PROMPT.format(
         timeout_situation=timeout_situation,
         timeout_guidance=timeout_guidance,
         decision_instructions=decision_instructions,

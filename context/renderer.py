@@ -1,4 +1,4 @@
-"""KFC 上下文渲染器。"""
+﻿"""NFC 上下文渲染器。"""
 
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ class ContextRenderer:
         from ..prompts.modules import build_mental_log_hint
 
         pm = get_prompt_manager()
-        tmpl = pm.get_template("kfc_system_prompt")
+        tmpl = pm.get_template("NFC_system_prompt")
         if not tmpl:
             return ""
 
@@ -228,7 +228,7 @@ class ContextRenderer:
     ) -> str:
         """复用或生成融合叙事。
 
-        KFC 会在 Wait/Stop 后跨 execute() 重建 payload。若每次都重新扫描
+        NFC 会在 Wait/Stop 后跨 execute() 重建 payload。若每次都重新扫描
         MentalLog 与历史消息，叙事尾部可能随运行时状态发生细微变化，从而破坏
         LLM 服务端 prompt prefix cache。这里按 before_ts（即 chain_cutoff_ts）
         冻结叙事文本，使相同截止点的重建得到字节级一致的前缀。

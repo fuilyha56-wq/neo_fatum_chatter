@@ -1,4 +1,4 @@
-"""KokoroFlowChatter 配置定义。
+﻿"""NeoFatumChatter 配置定义。
 
 定义插件所有可配置参数，基于 Pydantic + TOML 热重载。
 通过 @config_section 划分为语义清晰的 Section。
@@ -11,11 +11,11 @@ from typing import ClassVar
 from src.app.plugin_system.base import BaseConfig, Field, SectionBase, config_section
 
 
-class KFCConfig(BaseConfig):
-    """KokoroFlowChatter 配置。"""
+class NFCConfig(BaseConfig):
+    """NeoFatumChatter 配置。"""
 
     config_name: ClassVar[str] = "config"
-    config_description: ClassVar[str] = "KokoroFlowChatter 配置"
+    config_description: ClassVar[str] = "NeoFatumChatter 配置"
 
     @config_section("general")
     class GeneralSection(SectionBase):
@@ -59,14 +59,14 @@ class KFCConfig(BaseConfig):
             default=1,
             description=(
                 "纯文本感知草稿未形成工具调用时的最大重试次数。"
-                "KFC 会把该轮输出视为未发送草稿，并注入 tool-call 约束后重试。"
+                "NFC 会把该轮输出视为未发送草稿，并注入 tool-call 约束后重试。"
                 "0 表示不重试。"
             ),
         )
         custom_decision_prompt: str = Field(
             default="",
             description=(
-                "自定义决策提示词。用于指导 KFC 的决策行为，"
+                "自定义决策提示词。用于指导 NFC 的决策行为，"
                 "会被注入到系统提示词的安全准则之后。留空则不生效。"
             ),
         )

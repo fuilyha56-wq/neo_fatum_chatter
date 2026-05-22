@@ -1,4 +1,4 @@
-"""KFC 决策对象构建。"""
+﻿"""NFC 决策对象构建。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..domain.decision import Decision, ProactiveSchedule, ToolCallSpec
-from ..models import DO_NOTHING, KFC_REPLY, ToolCallResult
+from ..models import DO_NOTHING, NFC_REPLY, ToolCallResult
 from ..parser import coerce_call_list, parse_tool_calls
 
 
@@ -40,7 +40,7 @@ def _extract_visible_reply_segments(result: ToolCallResult) -> list[str]:
     """提取用户实际可见的回复段落。"""
     segments: list[str] = []
     for action in result.actions:
-        if action.get("type") != KFC_REPLY:
+        if action.get("type") != NFC_REPLY:
             continue
 
         raw_content = action.get("content")
@@ -65,7 +65,7 @@ def build_decision(result: ToolCallResult, response: Any) -> Decision:
 
     for call in call_list:
         normalized_name = _normalize_call_name(getattr(call, "name", ""))
-        if normalized_name in (KFC_REPLY, DO_NOTHING):
+        if normalized_name in (NFC_REPLY, DO_NOTHING):
             continue
 
         args = _extract_args(getattr(call, "args", {}))

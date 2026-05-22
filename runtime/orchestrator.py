@@ -1,4 +1,4 @@
-"""KFC 运行时总控。"""
+﻿"""NFC 运行时总控。"""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ from src.kernel.llm.exceptions import (
     LLMError,
 )
 
-from ..debug.log_formatter import log_kfc_result
+from ..debug.log_formatter import log_nfc_result
 from ..parser import coerce_call_list
-from ..protocol.compat_adapter import prepare_kfc_model_set
+from ..protocol.compat_adapter import prepare_nfc_model_set
 from ..protocol.decision_parser import parse_response_decision
 from ..services import (
     MultimodalService,
@@ -34,16 +34,16 @@ from ..services import (
 from .turn_controller import commit_turn_decision, prepare_turn_input
 
 if TYPE_CHECKING:
-    from ..chatter import KokoroFlowChatter
+    from ..chatter import NeoFatumChatter
 
 
-logger = get_logger("kfc_chatter")
+logger = get_logger("NFC_chatter")
 
 
 async def execute_orchestrator(
-    chatter: KokoroFlowChatter,
+    chatter: NeoFatumChatter,
 ) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
-    """执行 KFC 对话主循环。"""
+    """执行 NFC 对话主循环。"""
     from src.app.plugin_system.api.stream_api import activate_stream
 
     self = chatter
@@ -56,7 +56,7 @@ async def execute_orchestrator(
     config = self._get_config()
 
     if not config.general.enabled:
-        logger.debug("KFC 插件已禁用，跳过 execute")
+        logger.debug("NFC 插件已禁用，跳过 execute")
         yield Stop(0)
         return
 
@@ -100,7 +100,7 @@ async def execute_orchestrator(
             yield Failure("模型配置错误：未找到有效的模型配置")
             return
 
-        model_set = prepare_kfc_model_set(model_set)
+        model_set = prepare_nfc_model_set(model_set)
 
         (
             response,
@@ -279,14 +279,14 @@ async def execute_orchestrator(
             if call_list:
                 logger.info(f"本轮调用列表：{[call.name for call in call_list]}")
             elif getattr(response, "message", ""):
-                logger.debug("[KFC] 本轮无 tool call，等待标准化器判定是否需要重试")
+                logger.debug("[NFC] 本轮无 tool call，等待标准化器判定是否需要重试")
 
             # ── 兜底：感知阶段耗尽重试仍无工具调用时，将纯文本作为回复发出 ──
             if not call_list:
                 fallback_text = (getattr(response, "message", "") or "").strip()
                 if fallback_text:
                     logger.warning(
-                        f"[KFC] 感知阶段耗尽重试仍无工具调用，将纯文本作为兜底回复发出: "
+                        f"[NFC] 感知阶段耗尽重试仍无工具调用，将纯文本作为兜底回复发出: "
                         f"{fallback_text[:80]}{'...' if len(fallback_text) > 80 else ''}"
                     )
                     trigger_msg = unread_msgs[-1] if unread_msgs else None
@@ -303,7 +303,7 @@ async def execute_orchestrator(
                             visible_reply_segments=[fallback_text],
                             has_reply_action=True,
                             has_meaningful_action=True,
-                            actions=[{"type": "kfc_reply", "content": [fallback_text]}],
+                            actions=[{"type": "NFC_reply", "content": [fallback_text]}],
                         )
                         turn_control = await commit_turn_decision(
                             self,
@@ -338,7 +338,7 @@ async def execute_orchestrator(
                 config,
                 execute_reply_fn=self._execute_reply,
                 run_tool_call_fn=self.run_tool_call,
-                pre_execute_hook=lambda result: log_kfc_result(result, config),
+                pre_execute_hook=lambda result: log_nfc_result(result, config),
             )
 
             if decision.has_reply_action:
@@ -364,7 +364,7 @@ async def execute_orchestrator(
                         decision.proactive_schedule,
                     )
                 except Exception as exc:
-                    logger.warning(f"[KFC] schedule_proactive 参数解析失败: {exc}")
+                    logger.warning(f"[NFC] schedule_proactive 参数解析失败: {exc}")
 
             turn_control = await commit_turn_decision(
                 self,

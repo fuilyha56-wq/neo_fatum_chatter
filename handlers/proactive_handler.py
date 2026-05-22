@@ -1,6 +1,6 @@
-"""主动发起事件处理器。
+﻿"""主动发起事件处理器。
 
-订阅 ``kfc.proactive_trigger`` 事件，
+订阅 ``NFC.proactive_trigger`` 事件，
 将系统触发消息注入目标流的 unread_messages 并唤醒流循环，
 从而端到端打通主动发起功能。
 """
@@ -18,21 +18,21 @@ from src.app.plugin_system.api.event_api import EventDecision
 if TYPE_CHECKING:
     from src.app.plugin_system.api.event_api import EventType
 
-logger = get_logger("kfc_proactive_handler")
+logger = get_logger("NFC_proactive_handler")
 
 # 主动发起事件名
-_PROACTIVE_EVENT = "kfc.proactive_trigger"
+_PROACTIVE_EVENT = "NFC.proactive_trigger"
 
 
 class ProactiveHandler(BaseEventHandler):
     """主动发起事件处理器。
 
     当定时器检测到满足主动发起条件后，通过 EventBus 发布
-    ``kfc.proactive_trigger`` 事件。本处理器接收该事件，
+    ``NFC.proactive_trigger`` 事件。本处理器接收该事件，
     向目标流注入一条系统触发消息并唤醒流循环。
     """
 
-    handler_name: str = "kfc_proactive_handler"
+    handler_name: str = "nfc_proactive_handler"
     handler_description: str = "响应主动发起事件，唤醒目标聊天流"
     weight: int = 0
     intercept_message: bool = False
@@ -86,11 +86,11 @@ class ProactiveHandler(BaseEventHandler):
         is_cold_start = chat_stream is None
 
         if is_cold_start:
-            # 流不在内存中，尝试从 KFC session 获取元信息并冷启动
+            # 流不在内存中，尝试从 NFC session 获取元信息并冷启动
             cold_session = None
             try:
-                from ..plugin import KFCPlugin
-                if isinstance(self.plugin, KFCPlugin):
+                from ..plugin import NFCPlugin
+                if isinstance(self.plugin, NFCPlugin):
                     cold_session = await self.plugin._session_store.peek(stream_id)  # type: ignore[attr-defined]
             except Exception as e:
                 logger.debug(f"读取 session 失败: {e}")
@@ -113,12 +113,12 @@ class ProactiveHandler(BaseEventHandler):
 
         context = chat_stream.context
 
-        # 尝试从 KFCSession 获取真实 user_id 和沉默时长
+        # 尝试从 NFCSession 获取真实 user_id 和沉默时长
         target_user_id: str = ""
         silence_minutes: float = 0.0
         try:
-            from ..plugin import KFCPlugin
-            if isinstance(self.plugin, KFCPlugin):
+            from ..plugin import NFCPlugin
+            if isinstance(self.plugin, NFCPlugin):
                 session = await self.plugin._session_store.get(stream_id)  # type: ignore[attr-defined]
                 if session:
                     if session.user_id:
@@ -147,10 +147,10 @@ class ProactiveHandler(BaseEventHandler):
         proactive_content = "[主动发起] 你已经沉默很久了，主动找对方聊聊吧。"
         try:
             from ..prompts.modules import build_proactive_context
-            from ..config import KFCConfig
+            from ..config import NFCConfig
 
             use_tool_calling = True
-            if isinstance(self.plugin.config, KFCConfig):
+            if isinstance(self.plugin.config, NFCConfig):
                 use_tool_calling = self.plugin.config.general.use_tool_calling
 
             proactive_content = await build_proactive_context(

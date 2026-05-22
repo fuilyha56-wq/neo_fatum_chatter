@@ -1,4 +1,4 @@
-"""KFC JSON 回复解析器。
+﻿"""NFC JSON 回复解析器。
 
 模型在文本消息中输出 JSON 对象来表达回复决策，
 本模块负责从原始响应文本中提取并规范化该 JSON。
@@ -16,9 +16,9 @@ from typing import Any
 
 from src.app.plugin_system.api.log_api import get_logger
 
-logger = get_logger("kfc_reply_json")
+logger = get_logger("NFC_reply_json")
 
-# 识别关键字：解析出的 dict 必须含其中至少一个才认定为 KFC 回复 JSON
+# 识别关键字：解析出的 dict 必须含其中至少一个才认定为 NFC 回复 JSON
 _REPLY_KEYS: frozenset[str] = frozenset(
     {"content", "thought", "expected_reaction", "max_wait_seconds", "mood"}
 )
@@ -79,7 +79,7 @@ def _extract_balanced_json(text: str) -> list[str]:
 
 
 def extract_json_reply(text: str | None) -> dict[str, Any] | None:
-    """尝试从文本中提取 KFC 回复 JSON 对象。
+    """尝试从文本中提取 NFC 回复 JSON 对象。
 
     识别规则：解析出的 dict 必须包含至少一个回复相关键
     (content / thought / expected_reaction / max_wait_seconds / mood)。

@@ -1,4 +1,4 @@
-"""KFC 历史上下文 source 辅助。"""
+﻿"""NFC 历史上下文 source 辅助。"""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def build_fused_narrative(
     before_ts: float | None = None,
 ) -> str:
     """构建聊天历史与内心独白的融合叙事。"""
-    from ...models import KFCEventType
+    from ...models import NFCEventType
 
     msgs: list[Any] = list(
         getattr(
@@ -104,7 +104,7 @@ def build_fused_narrative(
 
         is_bot = bool(
             (bot_id and sender_id == bot_id)
-            or message_id.startswith("action_kfc_reply")
+            or message_id.startswith("action_nfc_reply")
         )
         if is_bot:
             timeline.append((ts, f"[{time_str}] 你回复：{text}"))
@@ -129,7 +129,7 @@ def build_fused_narrative(
         if before_ts is not None and entry.timestamp >= before_ts:
             continue
 
-        if entry.event_type == KFCEventType.BOT_PLANNING and entry.thought:
+        if entry.event_type == NFCEventType.BOT_PLANNING and entry.thought:
             timeline.append((ts, f"[{time_str}] （你的内心：{entry.thought}）"))
 
     if not timeline:

@@ -1,4 +1,4 @@
-"""KFC 消息积累窗口运行时。"""
+﻿"""NFC 消息积累窗口运行时。"""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..chatter import KokoroFlowChatter
-    from ..config import KFCConfig
+    from ..chatter import NeoFatumChatter
+    from ..config import NFCConfig
 
 
 async def accumulate_message_buffer(
-    chatter: KokoroFlowChatter,
-    config: KFCConfig,
+    chatter: NeoFatumChatter,
+    config: NFCConfig,
 ) -> tuple[str, list[Any]]:
     """在积累窗口内等待并聚合连发消息。"""
     window = config.buffer.accumulate_window

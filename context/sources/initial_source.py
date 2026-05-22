@@ -1,4 +1,4 @@
-"""KFC 初始上下文的 session/source 规划辅助。"""
+﻿"""NFC 初始上下文的 session/source 规划辅助。"""
 
 from __future__ import annotations
 
@@ -18,10 +18,10 @@ def build_initial_context_plan(
     session: Any,
 ) -> InitialContextPlan:
     """从配置与 session 提取初始上下文规划结果。"""
-    from ...prompts.templates import KFC_REPLY_MODE_TOOL_CALLING
+    from ...prompts.templates import NFC_REPLY_MODE_TOOL_CALLING
 
     extra_vars: dict[str, str] = {}
-    extra_vars["reply_mode_instruction"] = KFC_REPLY_MODE_TOOL_CALLING.format(
+    extra_vars["reply_mode_instruction"] = NFC_REPLY_MODE_TOOL_CALLING.format(
         segment_instruction=config.general.segment_instruction,
         wait_instruction=config.general.wait_instruction,
     )

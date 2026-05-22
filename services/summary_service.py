@@ -1,4 +1,4 @@
-"""KFC 近期摘要服务。"""
+﻿"""NFC 近期摘要服务。"""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ from src.kernel.concurrency import get_task_manager
 from ..compressor import compress_history, should_compress
 
 if TYPE_CHECKING:
-    from ..config import KFCConfig
-    from ..prompts.builder import KFCPromptBuilder
-    from ..session import KFCSession
+    from ..config import NFCConfig
+    from ..prompts.builder import NFCPromptBuilder
+    from ..session import NFCSession
 
 
-logger = get_logger("kfc_summary_service")
+logger = get_logger("NFC_summary_service")
 
 
 class SummaryService:
@@ -23,9 +23,9 @@ class SummaryService:
 
     @staticmethod
     def maybe_schedule_compression(
-        session: KFCSession,
-        prompt_builder: KFCPromptBuilder,
-        config: KFCConfig,
+        session: NFCSession,
+        prompt_builder: NFCPromptBuilder,
+        config: NFCConfig,
         chat_stream: Any,
     ) -> bool:
         """按当前 session 状态决定是否调度近期摘要压缩。"""
@@ -39,9 +39,9 @@ class SummaryService:
             if trigger_empty
             else f"满足周期条件（{session.compress_round_count}轮）"
         )
-        logger.info(f"[KFC] 触发近期记忆压缩：流 {session.stream_id}，原因：{reason}")
+        logger.info(f"[NFC] 触发近期记忆压缩：流 {session.stream_id}，原因：{reason}")
         get_task_manager().create_task(
             compress_history(session, prompt_builder, config, chat_stream),
-            name=f"kfc_compress_{session.stream_id}",
+            name=f"NFC_compress_{session.stream_id}",
         )
         return True

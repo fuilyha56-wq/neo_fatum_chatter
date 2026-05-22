@@ -1,4 +1,4 @@
-"""KFC provider 兼容适配。"""
+﻿"""NFC provider 兼容适配。"""
 
 from __future__ import annotations
 
@@ -34,8 +34,8 @@ def is_deepseek_model_set(model_set: Any) -> bool:
     return _is_deepseek_model_entry(model_set)
 
 
-def prepare_kfc_model_set(model_set: Any) -> Any:
-    """为 KFC 请求准备模型集，并对特定 provider 做请求级兼容。"""
+def prepare_nfc_model_set(model_set: Any) -> Any:
+    """为 NFC 请求准备模型集，并对特定 provider 做请求级兼容。"""
     if not isinstance(model_set, list):
         return model_set
 
@@ -77,7 +77,7 @@ def try_parse_tool_call_compat_response(response: Any) -> bool:
     response.message = parsed_message
     response.call_list = [
         ToolCall(
-            id=str(call.get("id") or f"kfc_compat_call_{index}"),
+            id=str(call.get("id") or f"NFC_compat_call_{index}"),
             name=call.get("name", ""),
             args=call.get("args", {}),
         )
