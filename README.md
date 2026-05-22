@@ -1,4 +1,4 @@
-# KokoroFlow Chatter (KFC)
+# Neo Fatum Chatter (KFC)
 
 > **版本选择说明（重要，置顶）**
 >

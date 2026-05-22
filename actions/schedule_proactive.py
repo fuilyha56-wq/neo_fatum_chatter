@@ -31,7 +31,7 @@ class ScheduleProactiveAction(BaseAction):
 
     action_name: str = "schedule_proactive"
     action_description: str = _BASE_DESCRIPTION
-    chatter_allow: list[str] = ["kokoro_flow_chatter"]
+    chatter_allow: list[str] = ["neo_fatum_chatter"]
 
     # 可配置的指导语（由插件在 on_plugin_loaded 时从 config 写入，初始为空）
     _guidance: ClassVar[str] = ""

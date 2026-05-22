@@ -82,7 +82,7 @@ class KFCReplyAction(BaseAction):
         "注意：本工具无法发送表情包等非文本内容。"
     )
 
-    chatter_allow: list[str] = ["kokoro_flow_chatter"]
+    chatter_allow: list[str] = ["neo_fatum_chatter"]
 
     async def execute(
         self,
