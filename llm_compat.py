@@ -13,7 +13,7 @@ from .protocol.compat_adapter import (
     rewrite_response_as_unsent_draft,
     try_parse_tool_call_compat_response,
 )
-from .protocol.response_normalizer import resolve_response_text
+from .protocol.response_normalizer import resolve_response_text, strip_thinking_blocks
 
 __all__ = [
     "build_tool_call_compat_retry_prompt",
@@ -22,5 +22,6 @@ __all__ = [
     "prepare_nfc_model_set",
     "resolve_response_text",
     "rewrite_response_as_unsent_draft",
+    "strip_thinking_blocks",
     "try_parse_tool_call_compat_response",
 ]
