@@ -1,4 +1,4 @@
-"""KFC runtime 导出。"""
+﻿"""NFC runtime 导出。"""
 
 from .interrupt_controller import send_interruptable_response
 from .message_buffer import accumulate_message_buffer

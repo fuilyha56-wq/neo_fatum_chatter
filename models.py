@@ -1,4 +1,4 @@
-"""KokoroFlowChatter 数据模型。
+﻿"""NeoFatumChatter 数据模型。
 
 定义所有共享数据类型：事件类型枚举、等待配置、工具调用解析结果等。
 """
@@ -12,7 +12,7 @@ from typing import Any
 
 
 # 控制流常量
-KFC_REPLY: str = "kfc_reply"
+NFC_REPLY: str = "nfc_reply"
 DO_NOTHING: str = "do_nothing"
 
 
@@ -25,7 +25,7 @@ class ToolCallResult:
     """
 
     thought: str = ""
-    """LLM 内心想法（来自 kfc_reply / do_nothing 的 thought 参数）"""
+    """LLM 内心想法（来自 NFC_REPLY / do_nothing 的 thought 参数）"""
 
     expected_reaction: str = ""
     """LLM 预期对方的反应"""
@@ -40,7 +40,7 @@ class ToolCallResult:
     """动作列表，每项包含 type + 对应参数"""
 
     has_reply: bool = False
-    """是否包含 kfc_reply 调用"""
+    """是否包含 NFC_REPLY 调用"""
 
     has_do_nothing: bool = False
     """是否包含 do_nothing 调用"""
@@ -60,7 +60,7 @@ class ToolCallResult:
 def extract_visible_reply_text(result: ToolCallResult) -> str:
     """从工具调用结果中提取用户实际看到的回复文本。
 
-    KFC 在 tool-calling 模式下会把 thought、第三方动作、预约等信息
+    NFC 在 tool-calling 模式下会把 thought、第三方动作、预约等信息
     记录到 MentalLog，但持久化对话链只应保留用户真正看到的回复内容。
 
     Args:
@@ -72,7 +72,7 @@ def extract_visible_reply_text(result: ToolCallResult) -> str:
     segments: list[str] = []
 
     for action in result.actions:
-        if action.get("type") != KFC_REPLY:
+        if action.get("type") != NFC_REPLY:
             continue
 
         raw_content = action.get("content")
@@ -88,7 +88,7 @@ def extract_visible_reply_text(result: ToolCallResult) -> str:
     return "\n".join(segments)
 
 
-class KFCEventType(Enum):
+class NFCEventType(Enum):
     """活动流事件类型，用于标记 mental_log 中不同类型的事件。"""
 
     USER_MESSAGE = "user_message"

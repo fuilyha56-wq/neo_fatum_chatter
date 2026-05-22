@@ -1,4 +1,4 @@
-"""KFC 主动思考服务。"""
+﻿"""NFC 主动思考服务。"""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from src.app.plugin_system.api.log_api import get_logger
 
 if TYPE_CHECKING:
     from ..domain.decision import ProactiveSchedule
-    from ..session import KFCSession
+    from ..session import NFCSession
 
 
-logger = get_logger("kfc_proactive_service")
+logger = get_logger("NFC_proactive_service")
 
 
 class ProactiveService:
@@ -20,7 +20,7 @@ class ProactiveService:
 
     @staticmethod
     def apply_schedule(
-        session: KFCSession,
+        session: NFCSession,
         proactive_schedule: ProactiveSchedule,
     ) -> None:
         """根据决策结果更新主动思考预约。"""
@@ -28,7 +28,7 @@ class ProactiveService:
         if delay_minutes == 0:
             session.scheduled_proactive_at = None
             session.scheduled_proactive_reason = ""
-            logger.info("[KFC] 已取消主动思考预约")
+            logger.info("[NFC] 已取消主动思考预约")
             return
 
         delay_minutes = max(30.0, min(1440.0, delay_minutes))
@@ -39,6 +39,6 @@ class ProactiveService:
             reason=reason,
         )
         logger.info(
-            f"[KFC] 已预约主动思考: {delay_minutes:.0f} 分钟后"
+            f"[NFC] 已预约主动思考: {delay_minutes:.0f} 分钟后"
             + (f"，理由：{reason}" if reason else "")
         )

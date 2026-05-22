@@ -1,4 +1,4 @@
-"""KFC 回复动作。
+﻿"""NFC 回复动作。
 
 包含最后一道防线：防御性清洗 content 中混入的元数据。
 """
@@ -14,7 +14,7 @@ from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.api.send_api import send_text
 from src.app.plugin_system.base import BaseAction
 
-logger = get_logger("kfc_reply")
+logger = get_logger("NFC_reply")
 
 # 元数据关键字模式（最后防线）
 # 仅当多个元数据关键字同时出现时才判定为泄漏，降低误伤概率
@@ -71,10 +71,10 @@ def _coerce_content_segments(content: list[str] | str | None) -> list[str]:
     return segments
 
 
-class KFCReplyAction(BaseAction):
+class NFCReplyAction(BaseAction):
     """发送文本消息给对方。"""
 
-    action_name = "kfc_reply"
+    action_name = "nfc_reply"
     action_description = (
         "发送文本消息给对方。"
         "content 为消息段落列表，每个元素是一条独立消息，系统会依次发出。"

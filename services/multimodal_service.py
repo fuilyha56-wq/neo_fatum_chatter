@@ -1,4 +1,4 @@
-"""KFC 多模态服务。"""
+﻿"""NFC 多模态服务。"""
 
 from __future__ import annotations
 

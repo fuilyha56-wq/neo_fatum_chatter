@@ -1,6 +1,6 @@
-"""KFC 提示词构建器。
+﻿"""NFC 提示词构建器。
 
-KFCPromptBuilder 负责在 execute() 中构建完整的系统提示词，
+NFCPromptBuilder 负责在 execute() 中构建完整的系统提示词，
 以及对话循环中的 User Payload 和 Timeout Payload。
 """
 
@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from src.core.models.stream import ChatStream
 
 
-class KFCPromptBuilder:
-    """KFC 提示词构建器。
+class NFCPromptBuilder:
+    """NFC 提示词构建器。
 
     从 PromptManager 中获取已注册的模板，
     填入动态变量后构建最终的系统提示词。
@@ -81,7 +81,7 @@ class KFCPromptBuilder:
         心理活动已在融合叙事时间线中展示，不再单独注入摘要。
         如果携带多模态图片，则打包为 Text + Image 混合内容。
 
-        触发 ``on_prompt_build`` 事件（模板名 ``kfc_user_prompt``），
+        触发 ``on_prompt_build`` 事件（模板名 ``nfc_user_prompt``），
         允许外部插件（如 prompt_injector）向历史末尾追加额外的独立 USER payload。
         注入内容不会拼入 user_text，而是作为单独的第二个 payload 返回，
         由调用方在发送前临时追加、发送后移除，从而不进入持久历史。
@@ -150,7 +150,7 @@ class KFCPromptBuilder:
 
         将数据库聊天记录和心理活动日志按时间交织在一起，
         形成一个包含"说了什么"和"想了什么"的统一时间线。
-        这是老版 KFC 的核心设计——让 LLM 在回顾历史时不仅看到
+        这是老版 NFC 的核心设计——让 LLM 在回顾历史时不仅看到
         对话内容，还能看到每个节点上自己当时的内心活动。
 
         消息来源：context.history_messages（受 core.toml max_context_size 管控）。

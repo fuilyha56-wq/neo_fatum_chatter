@@ -1,4 +1,4 @@
-"""KFC LLM payload 链路清洗工具。"""
+﻿"""NFC LLM payload 链路清洗工具。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall, ToolResult
 
-logger = get_logger("kfc_context_sanitizer")
+logger = get_logger("NFC_context_sanitizer")
 
 _PINNED_ROLES = {ROLE.SYSTEM, ROLE.TOOL}
 
@@ -62,7 +62,7 @@ def close_pending_tool_chain(response: Any, *, reason: str = "继续对话") -> 
     if getattr(payloads[-1], "role", None) != ROLE.TOOL_RESULT:
         return False
 
-    logger.debug(f"[KFC] {reason}: 尾部 tool_result，补 assistant 桥接以闭合工具链")
+    logger.debug(f"[NFC] {reason}: 尾部 tool_result，补 assistant 桥接以闭合工具链")
     response.add_payload(LLMPayload(ROLE.ASSISTANT, Text("")))
     return True
 
@@ -97,7 +97,7 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
                 cleaned.append(bridge)
                 last_convo_role = ROLE.ASSISTANT
                 changed = True
-                logger.debug(f"[KFC] {reason}: user 前补 assistant 桥接，闭合 tool_result")
+                logger.debug(f"[NFC] {reason}: user 前补 assistant 桥接，闭合 tool_result")
             cleaned.append(payload)
             last_convo_role = ROLE.USER
             seen_user = True
@@ -106,7 +106,7 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
         if role == ROLE.ASSISTANT:
             if not seen_user and last_convo_role is None:
                 changed = True
-                logger.debug(f"[KFC] {reason}: 移除首个 user 前孤立 assistant")
+                logger.debug(f"[NFC] {reason}: 移除首个 user 前孤立 assistant")
                 continue
 
             if last_convo_role == ROLE.ASSISTANT:
@@ -126,22 +126,22 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
                 ):
                     if _payload_text(payload):
                         _merge_payload_content(previous, payload)
-                        logger.debug(f"[KFC] {reason}: 合并连续 assistant payload")
+                        logger.debug(f"[NFC] {reason}: 合并连续 assistant payload")
                     else:
-                        logger.debug(f"[KFC] {reason}: 丢弃空的连续 assistant payload")
+                        logger.debug(f"[NFC] {reason}: 丢弃空的连续 assistant payload")
                     changed = True
                     continue
 
                 if not _payload_text(payload) and not _has_tool_call(payload):
                     changed = True
-                    logger.debug(f"[KFC] {reason}: 丢弃非法连续空 assistant payload")
+                    logger.debug(f"[NFC] {reason}: 丢弃非法连续空 assistant payload")
                     continue
 
                 bridge = LLMPayload(ROLE.USER, Text("请继续根据上文完成本轮决策。"))
                 cleaned.append(bridge)
                 last_convo_role = ROLE.USER
                 changed = True
-                logger.debug(f"[KFC] {reason}: 连续 assistant 无法合并，插入 user 桥接")
+                logger.debug(f"[NFC] {reason}: 连续 assistant 无法合并，插入 user 桥接")
 
             cleaned.append(payload)
             last_convo_role = ROLE.ASSISTANT
@@ -151,12 +151,12 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
             valid_results = _valid_tool_results(payload)
             if last_convo_role != ROLE.ASSISTANT or not valid_results:
                 changed = True
-                logger.debug(f"[KFC] {reason}: 丢弃孤立、空或缺少 call_id 的 tool_result payload")
+                logger.debug(f"[NFC] {reason}: 丢弃孤立、空或缺少 call_id 的 tool_result payload")
                 continue
             if len(valid_results) != len(getattr(payload, "content", [])):
                 payload.content = valid_results
                 changed = True
-                logger.debug(f"[KFC] {reason}: 移除缺少 call_id 的 tool_result 内容")
+                logger.debug(f"[NFC] {reason}: 移除缺少 call_id 的 tool_result 内容")
             cleaned.append(payload)
             last_convo_role = ROLE.TOOL_RESULT
             continue

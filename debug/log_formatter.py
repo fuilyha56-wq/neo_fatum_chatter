@@ -1,4 +1,4 @@
-"""KFC 调试日志格式化工具。
+﻿"""NFC 调试日志格式化工具。
 
 将 LLM 请求/响应的 payload 列表格式化为人类可读的面板输出，
 以及 ToolCallResult 的美化摘要。
@@ -12,13 +12,13 @@ from typing import Any, TYPE_CHECKING
 from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.llm import ROLE
 
-from ..models import KFC_REPLY, DO_NOTHING
+from ..models import NFC_REPLY, DO_NOTHING
 
 if TYPE_CHECKING:
-    from ..config import KFCConfig
+    from ..config import NFCConfig
     from ..models import ToolCallResult
 
-logger = get_logger("kfc_debug")
+logger = get_logger("NFC_debug")
 
 
 def _extract_payload_text(payload: Any) -> tuple[list[str], list[dict[str, Any]]]:
@@ -160,12 +160,12 @@ def format_prompt_for_log(response: Any) -> str:
     return "\n\n".join(sections) if sections else "（无 payload）"
 
 
-def log_kfc_result(result: ToolCallResult, config: KFCConfig) -> None:
+def log_nfc_result(result: ToolCallResult, config: NFCConfig) -> None:
     """美化输出 LLM 响应摘要。
 
     Args:
         result: 工具调用解析结果
-        config: KFC 配置
+        config: NFC 配置
     """
     if not config.debug.show_response:
         return
@@ -175,7 +175,7 @@ def log_kfc_result(result: ToolCallResult, config: KFCConfig) -> None:
 
     for action in result.actions:
         action_type = action.get("type", "")
-        if action_type in (KFC_REPLY, "respond"):
+        if action_type in (NFC_REPLY, "respond"):
             content = action.get("content")
             if content:
                 if isinstance(content, list):

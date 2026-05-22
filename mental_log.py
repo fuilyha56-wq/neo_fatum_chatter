@@ -1,4 +1,4 @@
-"""心理活动流管理。
+﻿"""心理活动流管理。
 
 MentalLog 容器负责条目的添加、查询、上限裁剪和格式化。
 MentalLogEntry 记录活动流中的每一个事件节点。
@@ -10,14 +10,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .models import KFCEventType
+from .models import NFCEventType
 
 
 @dataclass
 class MentalLogEntry:
     """心理活动日志条目，记录活动流中的单个事件。"""
 
-    event_type: KFCEventType
+    event_type: NFCEventType
     timestamp: float
 
     # 通用字段
@@ -70,9 +70,9 @@ class MentalLogEntry:
         """从字典反序列化。"""
         event_type_str = data.get("event_type", "user_message")
         try:
-            event_type = KFCEventType(event_type_str)
+            event_type = NFCEventType(event_type_str)
         except ValueError:
-            event_type = KFCEventType.USER_MESSAGE
+            event_type = NFCEventType.USER_MESSAGE
 
         return cls(
             event_type=event_type,
@@ -120,7 +120,7 @@ class MentalLog:
         """获取最近 n 条条目。"""
         return self._entries[-n:] if self._entries else []
 
-    def get_last_by_type(self, event_type: KFCEventType) -> MentalLogEntry | None:
+    def get_last_by_type(self, event_type: NFCEventType) -> MentalLogEntry | None:
         """获取指定类型的最后一条条目。"""
         for entry in reversed(self._entries):
             if entry.event_type == event_type:
@@ -130,9 +130,9 @@ class MentalLog:
     def get_last_bot_reply_content(self) -> str:
         """获取最近一次 Bot 回复的文本内容。"""
         for entry in reversed(self._entries):
-            if entry.event_type == KFCEventType.BOT_PLANNING:
+            if entry.event_type == NFCEventType.BOT_PLANNING:
                 for action in entry.actions:
-                    if action.get("type") in ("kfc_reply", "respond"):
+                    if action.get("type") in ("NFC_reply", "respond"):
                         content = action.get("content", "")
                         if isinstance(content, list):
                             joined = " ".join(s for s in content if s)
@@ -192,12 +192,12 @@ class MentalLog:
         """将单个条目格式化为叙事行。"""
         event = entry.event_type
 
-        if event == KFCEventType.USER_MESSAGE:
+        if event == NFCEventType.USER_MESSAGE:
             name = entry.user_name or "用户"
             msg_id_part = f" [消息id:{entry.message_id}]" if entry.message_id else ""
             return f"[{time_str}] {name}{msg_id_part}说：{entry.content}"
 
-        if event == KFCEventType.BOT_PLANNING:
+        if event == NFCEventType.BOT_PLANNING:
             parts = [f"[{time_str}] 你的内心想法：{entry.thought}"]
             if entry.actions:
                 action_desc = ", ".join(
@@ -208,22 +208,22 @@ class MentalLog:
                 parts.append(f"  期望对方回应：{entry.expected_reaction}")
             return "\n".join(parts)
 
-        if event == KFCEventType.WAITING_UPDATE:
+        if event == NFCEventType.WAITING_UPDATE:
             return f"[{time_str}] (等待中的内心活动) {entry.waiting_thought}"
 
-        if event == KFCEventType.WAIT_TIMEOUT:
+        if event == NFCEventType.WAIT_TIMEOUT:
             return f"[{time_str}] 等待超时，已等待 {entry.elapsed_seconds:.0f} 秒"
 
-        if event == KFCEventType.REPLY_IN_TIME:
+        if event == NFCEventType.REPLY_IN_TIME:
             return f"[{time_str}] 在预期时间内收到了对方回复"
 
-        if event == KFCEventType.REPLY_LATE:
+        if event == NFCEventType.REPLY_LATE:
             return f"[{time_str}] 对方回复较晚（已等待 {entry.elapsed_seconds:.0f} 秒）"
 
-        if event == KFCEventType.PROACTIVE_TRIGGER:
+        if event == NFCEventType.PROACTIVE_TRIGGER:
             return f"[{time_str}] (主动发起) {entry.content}"
 
-        if event == KFCEventType.WAITING_START:
+        if event == NFCEventType.WAITING_START:
             return f"[{time_str}] 开始等待对方回复（最多 {entry.max_wait_seconds:.0f} 秒）"
 
         return f"[{time_str}] {entry.content}"
@@ -233,27 +233,27 @@ class MentalLog:
         """获取条目的简短摘要。"""
         event = entry.event_type
 
-        if event == KFCEventType.USER_MESSAGE:
+        if event == NFCEventType.USER_MESSAGE:
             name = entry.user_name or "用户"
             text = entry.content[:60]
             return f"{name}: {text}"
 
-        if event == KFCEventType.BOT_PLANNING:
+        if event == NFCEventType.BOT_PLANNING:
             return entry.thought[:60] if entry.thought else "(无想法)"
 
-        if event == KFCEventType.WAITING_UPDATE:
+        if event == NFCEventType.WAITING_UPDATE:
             return entry.waiting_thought[:60] if entry.waiting_thought else "(思考中)"
 
-        if event == KFCEventType.WAIT_TIMEOUT:
+        if event == NFCEventType.WAIT_TIMEOUT:
             return f"等待超时 ({entry.elapsed_seconds:.0f}s)"
 
-        if event == KFCEventType.REPLY_IN_TIME:
+        if event == NFCEventType.REPLY_IN_TIME:
             return "及时收到回复"
 
-        if event == KFCEventType.REPLY_LATE:
+        if event == NFCEventType.REPLY_LATE:
             return f"延迟回复 ({entry.elapsed_seconds:.0f}s)"
 
-        if event == KFCEventType.PROACTIVE_TRIGGER:
+        if event == NFCEventType.PROACTIVE_TRIGGER:
             return entry.content[:60] if entry.content else "主动发起"
 
         return entry.content[:60] if entry.content else str(event)

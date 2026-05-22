@@ -1,7 +1,7 @@
-"""KFC 会话状态管理。
+﻿"""NFC 会话状态管理。
 
-维护每个用户/流的 KFCSession，通过 KFCSessionStore 持久化。
-KFCSession 包含等待配置、连续超时计数、心理活动流等状态。
+维护每个用户/流的 NFCSession，通过 NFCSessionStore 持久化。
+NFCSession 包含等待配置、连续超时计数、心理活动流等状态。
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from src.app.plugin_system.api.log_api import get_logger
 
 from .domain.scene_state import SceneState
 from .mental_log import MentalLog, MentalLogEntry
-from .models import KFCEventType, WaitingConfig
+from .models import NFCEventType, WaitingConfig
 
-logger = get_logger("kfc_session")
+logger = get_logger("NFC_session")
 
 
 @dataclass
-class KFCSession:
-    """KFC 会话状态数据。"""
+class NFCSession:
+    """NFC 会话状态数据。"""
 
     user_id: str
     stream_id: str
@@ -98,7 +98,7 @@ class KFCSession:
         """记录用户消息到活动流。"""
         msg_time = timestamp or time.time()
         entry = MentalLogEntry(
-            event_type=KFCEventType.USER_MESSAGE,
+            event_type=NFCEventType.USER_MESSAGE,
             timestamp=msg_time,
             content=content,
             user_name=user_name,
@@ -133,7 +133,7 @@ class KFCSession:
     ) -> MentalLogEntry:
         """记录 Bot 规划到活动流。"""
         entry = MentalLogEntry(
-            event_type=KFCEventType.BOT_PLANNING,
+            event_type=NFCEventType.BOT_PLANNING,
             timestamp=time.time(),
             thought=thought,
             actions=actions,
@@ -215,7 +215,7 @@ class KFCSession:
         }
         sender_str = "、".join(sorted(senders))
         entry = MentalLogEntry(
-            event_type=KFCEventType.USER_INTERRUPTED,
+            event_type=NFCEventType.USER_INTERRUPTED,
             timestamp=time.time(),
             content=(
                 f"我正在思考时，{sender_str} 发来了 {count} 条新消息，"
@@ -252,7 +252,7 @@ class KFCSession:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], max_log_entries: int = 50) -> KFCSession:
+    def from_dict(cls, data: dict[str, Any], max_log_entries: int = 50) -> NFCSession:
         """从字典反序列化。
 
         Args:
@@ -296,15 +296,15 @@ class KFCSession:
         return session
 
 
-class KFCSessionStore:
-    """KFC 会话持久化存储。
+class NFCSessionStore:
+    """NFC 会话持久化存储。
 
     使用 JSONStore 进行简单 JSON 文件持久化。
     Session 按 stream_id 索引。
     """
 
     def __init__(self, max_log_entries: int = 50) -> None:
-        self._sessions: dict[str, KFCSession] = {}
+        self._sessions: dict[str, NFCSession] = {}
         self._store_initialized = False
         self._locks: dict[str, asyncio.Lock] = {}
         self._max_log_entries = max_log_entries
@@ -346,7 +346,7 @@ class KFCSessionStore:
             self._json_store = None
             self._store_initialized = True
 
-    async def get_or_create(self, stream_id: str) -> KFCSession:
+    async def get_or_create(self, stream_id: str) -> NFCSession:
         """获取或创建 Session。
 
         注意：此方法不持有 per-stream 锁。调用方应使用 ``async with store.lock(stream_id)``
@@ -362,19 +362,19 @@ class KFCSessionStore:
             try:
                 data = await self._json_store.load(stream_id)
                 if data and isinstance(data, dict):
-                    session = KFCSession.from_dict(data, max_log_entries=self._max_log_entries)
+                    session = NFCSession.from_dict(data, max_log_entries=self._max_log_entries)
                     self._sessions[stream_id] = session
                     return session
             except Exception as e:
                 logger.warning(f"Session 加载失败 (stream={stream_id[:8]}): {e}")
 
         # 创建新 Session
-        session = KFCSession(user_id="", stream_id=stream_id, platform="")
+        session = NFCSession(user_id="", stream_id=stream_id, platform="")
         session.mental_log = MentalLog(max_entries=self._max_log_entries)
         self._sessions[stream_id] = session
         return session
 
-    async def save(self, session: KFCSession) -> None:
+    async def save(self, session: NFCSession) -> None:
         """保存 Session 到持久化存储。
 
         注意：此方法不持有 per-stream 锁。调用方应使用 ``async with store.lock(stream_id)``
@@ -399,7 +399,7 @@ class KFCSessionStore:
             if cleaned:
                 logger.debug(f"清理了 {cleaned} 个不活跃的锁")
 
-    async def get(self, stream_id: str) -> KFCSession | None:
+    async def get(self, stream_id: str) -> NFCSession | None:
         """获取 Session（不创建）。"""
         if stream_id in self._sessions:
             return self._sessions[stream_id]
@@ -409,14 +409,14 @@ class KFCSessionStore:
             try:
                 data = await self._json_store.load(stream_id)
                 if data and isinstance(data, dict):
-                    session = KFCSession.from_dict(data, max_log_entries=self._max_log_entries)
+                    session = NFCSession.from_dict(data, max_log_entries=self._max_log_entries)
                     self._sessions[stream_id] = session
                     return session
             except Exception as e:
                 logger.warning(f"Session 加载失败 (stream={stream_id[:8]}): {e}")
         return None
 
-    async def peek(self, stream_id: str) -> KFCSession | None:
+    async def peek(self, stream_id: str) -> NFCSession | None:
         """从磁盘读取 Session 但不加入内存缓存。
 
         适用于只需查看持久化字段、不希望副作用地污染内存缓存的场景。
@@ -426,7 +426,7 @@ class KFCSessionStore:
             stream_id: 目标流 ID
 
         Returns:
-            KFCSession 实例，或 None（文件不存在/解析失败）
+            NFCSession 实例，或 None（文件不存在/解析失败）
         """
         if stream_id in self._sessions:
             return self._sessions[stream_id]
@@ -436,12 +436,12 @@ class KFCSessionStore:
             try:
                 data = await self._json_store.load(stream_id)
                 if data and isinstance(data, dict):
-                    return KFCSession.from_dict(data, max_log_entries=self._max_log_entries)
+                    return NFCSession.from_dict(data, max_log_entries=self._max_log_entries)
             except Exception as e:
                 logger.warning(f"Session peek 失败 (stream={stream_id[:8]}): {e}")
         return None
 
-    def get_all_cached(self) -> dict[str, KFCSession]:
+    def get_all_cached(self) -> dict[str, NFCSession]:
         """获取所有缓存中的 Session（不触发 IO）。"""
         return dict(self._sessions)
 
@@ -481,7 +481,7 @@ class KFCSessionStore:
                 return []
         return []
 
-    async def _update_index(self, session: KFCSession) -> None:
+    async def _update_index(self, session: NFCSession) -> None:
         """更新 _index.json 索引文件（stream_id → 可读标识映射）。
 
         每次 save() 后自动调用，让用户可通过 _index.json 对照文件名与 QQ 号。

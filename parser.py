@@ -1,4 +1,4 @@
-"""KFC 工具调用解析器。
+﻿"""NFC 工具调用解析器。
 
 这一版保留原插件全部能力，但把实际执行统一收敛到 MoFox 标准
 `BaseChatter.run_tool_call()` / `src.core.utils.llm_tool_call.run_tool_call()` 链路。
@@ -14,14 +14,14 @@ from typing import TYPE_CHECKING, Any
 from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall
 
-from .models import DO_NOTHING, KFC_REPLY, ToolCallResult
+from .models import DO_NOTHING, NFC_REPLY, ToolCallResult
 
 if TYPE_CHECKING:
     from src.kernel.llm import ToolRegistry
 
-    from .config import KFCConfig
+    from .config import NFCConfig
 
-logger = get_logger("kfc_parser")
+logger = get_logger("NFC_parser")
 
 
 def coerce_call_list(response: Any) -> list[Any]:
@@ -80,7 +80,7 @@ def _build_fallback_call_id(index: int, name: str) -> str:
     """为缺失 id 的 tool call 生成稳定的本轮兜底 id。"""
     safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name)
     safe_name = safe_name or "tool"
-    return f"kfc_call_{index}_{safe_name}"
+    return f"NFC_call_{index}_{safe_name}"
 
 
 def _ensure_standard_call(call: Any, index: int) -> ToolCall:
@@ -161,7 +161,7 @@ def _extract_perception_draft(response: Any) -> str:
 
     当模型在感知阶段输出了纯文本后，系统会将其改写为
     <unsent_perception_draft> 格式存入 assistant payload。
-    此函数逆向提取该草稿的原始文本，用于在 kfc_reply content
+    此函数逆向提取该草稿的原始文本，用于在 NFC_REPLY content
     为空时作为兜底回填。
 
     Returns:
@@ -194,9 +194,9 @@ async def parse_tool_calls(
     response: Any,
     usable_map: ToolRegistry,
     trigger_msg: Any | None,
-    config: KFCConfig,
+    config: NFCConfig,
     *,
-    execute_reply_fn: Callable[[str, KFCConfig, Any | None, str], Awaitable[bool]],
+    execute_reply_fn: Callable[[str, NFCConfig, Any | None, str], Awaitable[bool]],
     run_tool_call_fn: Callable[[Any, Any, ToolRegistry, Any | None], Awaitable[list[tuple[bool, bool]]]],
     pre_execute_hook: Callable[[ToolCallResult], None] | None = None,
 ) -> ToolCallResult:
@@ -217,7 +217,7 @@ async def parse_tool_calls(
         if not pending_third_party_calls:
             return
 
-        logger.debug(f"[KFC] 标准批量执行 {len(pending_third_party_calls)} 个第三方工具")
+        logger.debug(f"[NFC] 标准批量执行 {len(pending_third_party_calls)} 个第三方工具")
         current_pending = list(pending_third_party_calls)
         pending_third_party_calls.clear()
 
@@ -226,7 +226,7 @@ async def parse_tool_calls(
             appended, success = call_result
             if not appended or not success:
                 logger.warning(
-                    f"[KFC] 工具 {call.name} 执行失败或被跳过"
+                    f"[NFC] 工具 {call.name} 执行失败或被跳过"
                     "（可能原因：工具未注册、无触发消息或执行异常）"
                 )
 
@@ -235,7 +235,7 @@ async def parse_tool_calls(
         for raw_call in call_list:
             args = _extract_args(getattr(raw_call, "args", {}))
             normalized_name = _normalize_call_name(getattr(raw_call, "name", ""))
-            if normalized_name in (KFC_REPLY, DO_NOTHING):
+            if normalized_name in (NFC_REPLY, DO_NOTHING):
                 extract_metadata(result, args)
                 break
 
@@ -248,7 +248,7 @@ async def parse_tool_calls(
         reason = args.get("reason", "未提供原因")
         logger.info(f"LLM 调用 {call.name}，原因: {reason}")
 
-        if normalized_name == KFC_REPLY:
+        if normalized_name == NFC_REPLY:
             await flush_pending_third_party()
             result.has_reply = True
             extract_metadata(result, args)
@@ -259,7 +259,7 @@ async def parse_tool_calls(
                 action_dict["content"] = [content] if content else []
 
             # ── 兜底：感知阶段草稿回填 ──
-            # 当模型在感知阶段已输出有效文本，但决策阶段调用 kfc_reply 时
+            # 当模型在感知阶段已输出有效文本，但决策阶段调用 NFC_REPLY 时
             # content 为空（模型误以为感知文本已发送），从 response 链中
             # 提取草稿文本作为实际发送内容。
             raw_content = action_dict.get("content")
@@ -272,7 +272,7 @@ async def parse_tool_calls(
                 draft_text = _extract_perception_draft(response)
                 if draft_text:
                     logger.info(
-                        f"[KFC] kfc_reply content 为空，回填感知阶段草稿: "
+                        f"[NFC] NFC_REPLY content 为空，回填感知阶段草稿: "
                         f"{draft_text[:80]}{'...' if len(draft_text) > 80 else ''}"
                     )
                     action_dict["content"] = [draft_text]
@@ -319,6 +319,6 @@ async def parse_tool_calls(
 
     if config.debug.show_prompt:
         call_names = [c.name for c in standardized_calls] if standardized_calls else []
-        logger.debug(f"[KFC] LLM 响应: tool_calls={len(call_names)} {call_names}")
+        logger.debug(f"[NFC] LLM 响应: tool_calls={len(call_names)} {call_names}")
 
     return result

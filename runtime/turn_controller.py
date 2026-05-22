@@ -1,4 +1,4 @@
-"""KFC 回合提交控制。"""
+﻿"""NFC 回合提交控制。"""
 
 from __future__ import annotations
 
@@ -15,16 +15,16 @@ from ..services import SummaryService
 from ..services.context_sanitizer import close_pending_tool_chain, prepare_payload_chain_for_send
 
 if TYPE_CHECKING:
-    from ..config import KFCConfig
+    from ..config import NFCConfig
     from ..domain.decision import Decision
-    from ..prompts.builder import KFCPromptBuilder
-    from ..session import KFCSession
-    from ..chatter import KokoroFlowChatter
+    from ..prompts.builder import NFCPromptBuilder
+    from ..session import NFCSession
+    from ..chatter import NeoFatumChatter
     from src.core.models.stream import ChatStream
     from ..services.timeout_service import TimeoutService
 
 
-logger = get_logger("kfc_chatter")
+logger = get_logger("NFC_chatter")
 
 
 @dataclass(slots=True)
@@ -53,12 +53,12 @@ class TurnInputResult:
 
 
 async def prepare_turn_input(
-    chatter: KokoroFlowChatter,
+    chatter: NeoFatumChatter,
     response: Any,
     chat_stream: ChatStream,
-    config: KFCConfig,
-    session: KFCSession,
-    prompt_builder: KFCPromptBuilder,
+    config: NFCConfig,
+    session: NFCSession,
+    prompt_builder: NFCPromptBuilder,
     timeout_service: TimeoutService,
     image_budget: Any,
     has_history: bool,
@@ -138,7 +138,7 @@ async def prepare_turn_input(
                     else f"{existing}\n{user_payload.content.text}"  # type: ignore[attr-defined]
                 )
                 upserted = True
-                logger.debug("[KFC] Upsert USER payload（打断重来合并新消息）")
+                logger.debug("[NFC] Upsert USER payload（打断重来合并新消息）")
         if not upserted:
             response.add_payload(user_payload)
     elif has_pending_tool_results:
@@ -199,12 +199,12 @@ async def prepare_turn_input(
 
 
 async def commit_turn_decision(
-    chatter: KokoroFlowChatter,
+    chatter: NeoFatumChatter,
     decision: Decision,
     response: Any,
-    session: KFCSession,
-    config: KFCConfig,
-    prompt_builder: KFCPromptBuilder,
+    session: NFCSession,
+    config: NFCConfig,
+    prompt_builder: NFCPromptBuilder,
     chat_stream: ChatStream,
     pre_send_user_text: str,
     last_user_ts: float,

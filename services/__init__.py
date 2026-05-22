@@ -1,4 +1,4 @@
-"""KFC 运行时服务导出。"""
+﻿"""NFC 运行时服务导出。"""
 
 from .multimodal_service import MultimodalService
 from .proactive_service import ProactiveService

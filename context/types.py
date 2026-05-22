@@ -1,4 +1,4 @@
-"""KFC 上下文层共享类型。"""
+﻿"""NFC 上下文层共享类型。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""KFC 事件处理器模块。"""
+﻿"""NFC 事件处理器模块。"""
 
 from __future__ import annotations
 

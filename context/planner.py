@@ -1,4 +1,4 @@
-"""KFC 上下文规划器。"""
+﻿"""NFC 上下文规划器。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class ContextPlanner:
         """规划本轮用户输入和第三方 turn 级上下文贡献。"""
         user_text = f"[新消息]\n{formatted_unreads}"
         contributions = await collect_plugin_turn_contributions(
-            prompt_name="kfc_user_prompt",
+            prompt_name="NFC_user_prompt",
             content=user_text,
             stream_id=stream_id,
         )

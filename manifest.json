@@ -1,7 +1,7 @@
 {
     "name": "neo_fatum_chatter",
     "version": "2.0.4",
-    "description": "KokoroFlow 对话引擎 — 基于心理活动流的私聊特化聊天器",
+    "description": "Neo Fatum Chatter 对话引擎 — 基于心理活动流的私聊特化聊天器",
     "author": "Lycoris",
     "dependencies": {
         "plugins": [],
@@ -15,7 +15,7 @@
         },
         {
             "component_type": "action",
-            "component_name": "kfc_reply",
+            "component_name": "nfc_reply",
             "dependencies": []
         },
         {
@@ -30,7 +30,7 @@
         },
         {
             "component_type": "event_handler",
-            "component_name": "kfc_proactive_handler",
+            "component_name": "nfc_proactive_handler",
             "dependencies": []
         },
         {

@@ -1,4 +1,4 @@
-"""KFC 响应标准化。"""
+﻿"""NFC 响应标准化。"""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def resolve_response_text(response: Any) -> tuple[str, bool]:
 
 
 def normalize_response(response: Any) -> NormalizedResponse:
-    """将 provider 原始响应标准化为 KFC 统一视图。"""
+    """将 provider 原始响应标准化为 NFC 统一视图。"""
     resolved_text, used_reasoning = resolve_response_text(response)
     if used_reasoning and not (response.message or "").strip() and not getattr(response, "call_list", None):
         response.message = resolved_text

@@ -1,4 +1,4 @@
-"""超时处理器。
+﻿"""超时处理器。
 
 TimeoutHandler 在等待超时后生成决策提示，
 供 Chatter 的 execute() 在下一轮循环中使用。
@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING
 from src.app.plugin_system.api.log_api import get_logger
 
 from ..mental_log import MentalLogEntry
-from ..models import KFCEventType
+from ..models import NFCEventType
 
 if TYPE_CHECKING:
-    from ..config import KFCConfig
-    from ..session import KFCSession
+    from ..config import NFCConfig
+    from ..session import NFCSession
 
-logger = get_logger("kfc_timeout")
+logger = get_logger("NFC_timeout")
 
 
 class TimeoutHandler:
@@ -28,10 +28,10 @@ class TimeoutHandler:
     并准备超时上下文。
     """
 
-    def __init__(self, config: KFCConfig) -> None:
+    def __init__(self, config: NFCConfig) -> None:
         self._config = config
 
-    def check_timeout(self, session: KFCSession) -> bool:
+    def check_timeout(self, session: NFCSession) -> bool:
         """检查 Session 是否超时。
 
         Args:
@@ -42,7 +42,7 @@ class TimeoutHandler:
         """
         return session.waiting_config.is_timeout()
 
-    def handle_timeout(self, session: KFCSession) -> dict[str, object]:
+    def handle_timeout(self, session: NFCSession) -> dict[str, object]:
         """处理超时，更新 Session 状态并返回超时上下文。
 
         Args:
@@ -57,7 +57,7 @@ class TimeoutHandler:
 
         # 记录超时到活动流
         timeout_entry = MentalLogEntry(
-            event_type=KFCEventType.WAIT_TIMEOUT,
+            event_type=NFCEventType.WAIT_TIMEOUT,
             timestamp=time.time(),
             elapsed_seconds=elapsed,
             content=f"等待超时，已等待 {elapsed:.0f} 秒",
@@ -85,7 +85,7 @@ class TimeoutHandler:
 
         return context
 
-    def should_give_up(self, session: KFCSession) -> bool:
+    def should_give_up(self, session: NFCSession) -> bool:
         """判断是否应该放弃等待（连续超时次数过多）。
 
         注意：此方法应在 ``handle_timeout()`` 之后调用。

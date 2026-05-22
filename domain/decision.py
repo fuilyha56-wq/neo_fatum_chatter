@@ -1,4 +1,4 @@
-"""KFC 内部决策协议。"""
+﻿"""NFC 内部决策协议。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class ProactiveSchedule:
 
 @dataclass(slots=True)
 class Decision:
-    """KFC 统一内部决策对象。"""
+    """NFC 统一内部决策对象。"""
 
     thought: str = ""
     mood: str = ""
