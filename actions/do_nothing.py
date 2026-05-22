@@ -18,7 +18,7 @@ class DoNothingAction(BaseAction):
     action_description: str = (
         "决定不做任何回复。当对方的消息不需要回应、纯表情、或者你选择已读不回时使用。"
     )
-    chatter_allow: list[str] = ["kokoro_flow_chatter"]
+    chatter_allow: list[str] = ["neo_fatum_chatter"]
 
     async def execute(
         self,
