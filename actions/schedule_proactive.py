@@ -60,6 +60,7 @@ class ScheduleProactiveAction(BaseAction):
             "此刻的真实想法：可以是一件具体的事，也可以只是「那个时间想找 Ta 说说话」。"
             "取消预约时（delay_minutes=0）可留空。",
         ] = "",
+        **_extra,
     ) -> tuple[bool, str]:
         """设置或取消主动思考预约。
 
@@ -67,9 +68,13 @@ class ScheduleProactiveAction(BaseAction):
             delay_minutes: 延迟分钟数，0 表示取消当前预约，其他值会被夹到 30~1440 范围。
             reason: 预约原因，取消时可留空。
 
+        ``**_extra`` 用于吞掉 LLM 偶尔幻觉出的未知参数，避免 TypeError。
+
         Returns:
             (True, 状态描述)
         """
+        if _extra:
+            logger.debug(f"忽略 schedule_proactive 未知参数: {sorted(_extra.keys())}")
         if delay_minutes == 0:
             logger.debug("取消主动思考预约")
             return True, "已取消当前主动思考预约"
