@@ -63,6 +63,14 @@ class NFCConfig(BaseConfig):
                 "0 表示不重试。"
             ),
         )
+        max_consecutive_llm_failures: int = Field(
+            default=15,
+            description=(
+                "连续 LLM 请求失败的最大容忍次数。"
+                "超过此值后终止当前会话循环并报告失败。"
+                "设为 0 则不限制（保持无限重试）。"
+            ),
+        )
         custom_decision_prompt: str = Field(
             default="",
             description=(
