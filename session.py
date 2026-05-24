@@ -68,6 +68,15 @@ class NFCSession:
     # 显式场景状态：只记录有证据支撑的场景信息，默认 unknown。
     scene_state: SceneState = field(default_factory=SceneState)
 
+    # 情绪轨迹：记录最近的情绪变化，用于主动发起和行为调整
+    # 每条格式：{"mood": str, "ts": float}
+    mood_history: list[dict[str, Any]] = field(default_factory=list)
+    _max_mood_entries: int = field(default=30, repr=False)
+
+    # 用户活跃时段学习：按小时统计活跃次数
+    # 格式：{hour_int: count}，24 个槽位
+    activity_hours: dict[str, int] = field(default_factory=dict)
+
     # 统计
     total_interactions: int = 0
 
@@ -121,6 +130,8 @@ class NFCSession:
         self.consecutive_timeout_count = 0
         self.last_user_message_at = msg_time
         self.last_activity_at = msg_time
+        # 记录用户活跃时段
+        self.record_activity_hour(msg_time)
         return entry
 
     def add_bot_planning(
@@ -156,6 +167,61 @@ class NFCSession:
         """
         self.scheduled_proactive_at = at
         self.scheduled_proactive_reason = reason if at is not None else ""
+
+    def record_mood(self, mood: str) -> None:
+        """记录一次情绪到轨迹历史。"""
+        if not mood or not mood.strip():
+            return
+        self.mood_history.append({"mood": mood.strip(), "ts": time.time()})
+        if len(self.mood_history) > self._max_mood_entries:
+            self.mood_history = self.mood_history[-self._max_mood_entries:]
+
+    def get_mood_summary(self, recent_n: int = 10) -> str:
+        """获取最近 N 条情绪的简要描述。"""
+        if not self.mood_history:
+            return ""
+        recent = self.mood_history[-recent_n:]
+        moods = [entry["mood"] for entry in recent]
+        return "、".join(moods)
+
+    def get_dominant_mood(self, recent_n: int = 5) -> str:
+        """获取最近 N 条中出现最多的情绪。"""
+        if not self.mood_history:
+            return ""
+        recent = self.mood_history[-recent_n:]
+        from collections import Counter
+        counter = Counter(entry["mood"] for entry in recent)
+        return counter.most_common(1)[0][0] if counter else ""
+
+    def record_activity_hour(self, timestamp: float | None = None) -> None:
+        """记录用户活跃时段（按小时统计）。"""
+        ts = timestamp or time.time()
+        hour = str(time.localtime(ts).tm_hour)
+        self.activity_hours[hour] = self.activity_hours.get(hour, 0) + 1
+
+    def get_active_hours(self, top_n: int = 5) -> list[int]:
+        """获取用户最活跃的 N 个小时（按活跃次数降序）。"""
+        if not self.activity_hours:
+            return []
+        sorted_hours = sorted(
+            self.activity_hours.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        return [int(h) for h, _ in sorted_hours[:top_n]]
+
+    def is_user_typically_active_now(self) -> bool:
+        """判断当前时间是否在用户的典型活跃时段内。"""
+        if not self.activity_hours:
+            return True  # 无数据时默认活跃
+        current_hour = str(time.localtime().tm_hour)
+        total = sum(self.activity_hours.values())
+        if total == 0:
+            return True
+        hour_count = self.activity_hours.get(current_hour, 0)
+        # 如果当前小时的活跃占比超过平均值的 50%，认为活跃
+        avg = total / 24.0
+        return hour_count >= avg * 0.5
 
     def update_chain(
         self, new_entries: list[dict[str, Any]], max_payloads: int
@@ -249,6 +315,8 @@ class NFCSession:
             "last_compress_at": self.last_compress_at,
             "compress_round_count": self.compress_round_count,
             "scene_state": self.scene_state.to_dict(),
+            "mood_history": self.mood_history,
+            "activity_hours": self.activity_hours,
         }
 
     @classmethod
@@ -281,8 +349,17 @@ class NFCSession:
             max_entries=max_log_entries,
         )
         session.total_interactions = int(data.get("total_interactions", 0))
-        # 持久化对话链
-        session.chain_payloads = data.get("chain_payloads", [])
+        # 持久化对话链（带基本校验）
+        raw_chain = data.get("chain_payloads", [])
+        if isinstance(raw_chain, list):
+            session.chain_payloads = [
+                entry for entry in raw_chain
+                if isinstance(entry, dict)
+                and entry.get("role") in ("user", "assistant")
+                and isinstance(entry.get("text", ""), str)
+            ]
+        else:
+            session.chain_payloads = []
         session.chain_cutoff_ts = float(data.get("chain_cutoff_ts", 0.0))
         session.frozen_narrative = str(data.get("frozen_narrative", "") or "")
         session.frozen_narrative_cutoff_ts = float(
@@ -293,6 +370,26 @@ class NFCSession:
         session.last_compress_at = float(data.get("last_compress_at", 0.0))
         session.compress_round_count = int(data.get("compress_round_count", 0))
         session.scene_state = SceneState.from_dict(data.get("scene_state", {}))
+        # 情绪轨迹
+        raw_mood = data.get("mood_history", [])
+        if isinstance(raw_mood, list):
+            session.mood_history = [
+                entry for entry in raw_mood
+                if isinstance(entry, dict)
+                and isinstance(entry.get("mood", ""), str)
+                and isinstance(entry.get("ts", 0), (int, float))
+            ]
+        else:
+            session.mood_history = []
+        # 用户活跃时段
+        raw_hours = data.get("activity_hours", {})
+        if isinstance(raw_hours, dict):
+            session.activity_hours = {
+                str(k): int(v) for k, v in raw_hours.items()
+                if isinstance(v, (int, float))
+            }
+        else:
+            session.activity_hours = {}
         return session
 
 
@@ -485,8 +582,11 @@ class NFCSessionStore:
         """更新 _index.json 索引文件（stream_id → 可读标识映射）。
 
         每次 save() 后自动调用，让用户可通过 _index.json 对照文件名与 QQ 号。
+        使用原子写入（写临时文件后 rename）防止写入中途崩溃导致文件损坏。
         """
         import json as _json
+        import os
+        import tempfile
 
         if self._json_store is None:
             return
@@ -507,9 +607,22 @@ class NFCSessionStore:
         }
         index[session.stream_id] = entry
 
-        # 写回
+        # 原子写入：先写临时文件，再 rename 覆盖
         try:
-            with open(index_path, "w", encoding="utf-8") as f:
-                _json.dump(index, f, ensure_ascii=False, indent=2)
+            dir_path = index_path.parent
+            fd, tmp_path = tempfile.mkstemp(
+                suffix=".tmp", prefix="_index_", dir=str(dir_path)
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    _json.dump(index, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, str(index_path))
+            except Exception:
+                # 清理临时文件
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             logger.debug(f"索引文件写入失败: {e}")

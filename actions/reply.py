@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import re
 from typing import Annotated, Any
@@ -46,14 +45,12 @@ def _coerce_content_segments(content: list[str] | str | None) -> list[str]:
 
         parsed: Any | None = None
         if stripped.startswith("[") and stripped.endswith("]"):
-            for parser in (json.loads, ast.literal_eval):
-                try:
-                    candidate = parser(stripped)
-                except Exception:
-                    continue
-                if isinstance(candidate, list):
-                    parsed = candidate
-                    break
+            try:
+                candidate = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                candidate = None
+            if isinstance(candidate, list):
+                parsed = candidate
 
         if isinstance(parsed, list):
             raw_items = parsed
@@ -102,6 +99,9 @@ class NFCReplyAction(BaseAction):
 
         支持异步生成器暂停点，让标准 tool 调度器能按调用顺序门控多个发送动作。
         """
+        import asyncio
+        import random as _random
+
         _ = thought, expected_reaction, max_wait_seconds, mood
 
         segments = _coerce_content_segments(content)
@@ -109,8 +109,28 @@ class NFCReplyAction(BaseAction):
             yield False, "内容为空，未发送"
             return
 
+        # 获取段间延迟配置
+        segment_delay_min = 0.5
+        segment_delay_max = 2.0
+        try:
+            from src.app.plugin_system.api.config_api import get_config
+            nfc_config = get_config("neo_fatum_chatter")
+            if nfc_config:
+                segment_delay_min = getattr(
+                    getattr(nfc_config, "reply", None), "segment_delay_min", 0.5
+                )
+                segment_delay_max = getattr(
+                    getattr(nfc_config, "reply", None), "segment_delay_max", 2.0
+                )
+        except Exception:
+            pass
+
         sent_count = 0
         for segment in segments:
+            # 段间延迟：非首条消息前等待随机时间
+            if sent_count > 0 and segment_delay_max > 0:
+                delay = _random.uniform(segment_delay_min, segment_delay_max)
+                await asyncio.sleep(delay)
             # 最后防线：剥离 thinking 块泄漏（DeepSeek V4 Pro Thinking 等模型偶尔会
             # 把 <think>/<thinking> 块直接吐到正文里）
             cleaned_segment = strip_thinking_blocks(segment)
