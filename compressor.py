@@ -54,6 +54,7 @@ async def compress_history(
     # ── 1. 从 DB 读取时间窗口内的历史消息 ──
     # 私聊流消息量有限，以大上限一次性拉取后按时间过滤，无需分页。
     _FETCH_LIMIT = 10000
+    _EFFECTIVE_LIMIT = 5000  # 实际参与压缩的最大消息数
     try:
         all_msgs = await get_stream_messages(stream_id=stream_id, limit=_FETCH_LIMIT)
     except Exception as exc:
@@ -62,6 +63,13 @@ async def compress_history(
 
     # 过滤到时间窗口内
     window_msgs = [m for m in all_msgs if _msg_time(m) >= since_ts]
+
+    if len(window_msgs) > _EFFECTIVE_LIMIT:
+        logger.warning(
+            f"[NFC] 压缩：流 {stream_id} 时间窗口内消息数 ({len(window_msgs)}) "
+            f"超过上限 ({_EFFECTIVE_LIMIT})，仅保留最近 {_EFFECTIVE_LIMIT} 条"
+        )
+        window_msgs = window_msgs[-_EFFECTIVE_LIMIT:]
 
     if not window_msgs:
         logger.debug(f"[NFC] 压缩：流 {stream_id} 最近 {days} 天无消息，跳过")

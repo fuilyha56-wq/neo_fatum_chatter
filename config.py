@@ -189,6 +189,29 @@ class NFCConfig(BaseConfig):
         typing_delay_max: float = Field(
             default=4.0, description="最大打字延迟(秒)"
         )
+        segment_delay_min: float = Field(
+            default=0.5,
+            description="多段消息之间的最小间隔(秒)，模拟真人打完一条再打下一条的节奏",
+        )
+        segment_delay_max: float = Field(
+            default=2.0,
+            description="多段消息之间的最大间隔(秒)",
+        )
+        streaming_enabled: bool = Field(
+            default=False,
+            description=(
+                "是否启用流式回复（打字机效果）。启用后，长消息会分块逐步发送，"
+                "模拟真人边打字边发送的体验。需要平台适配器支持编辑消息。"
+            ),
+        )
+        streaming_chunk_size: int = Field(
+            default=10,
+            description="流式回复每次追加的字符数",
+        )
+        streaming_interval: float = Field(
+            default=0.1,
+            description="流式回复每次追加之间的间隔(秒)",
+        )
 
     @config_section("prompt")
     class PromptSection(SectionBase):

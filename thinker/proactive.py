@@ -79,7 +79,10 @@ class ProactiveThinker:
         return self._should_trigger(session)
 
     def _should_trigger(self, session: NFCSession) -> bool:
-        """判断无预约情况下是否应主动发起（沉默条件 + 概率）。
+        """判断无预约情况下是否应主动发起（沉默条件 + 衰减概率）。
+
+        概率随沉默时长递增：超过阈值后，每多沉默一个阈值时长，
+        概率在基础值上线性递增，最高不超过 1.0。
 
         勿扰时段只在本路径（沉默触发）中检查，模型预约不受此限制。
 
@@ -89,6 +92,14 @@ class ProactiveThinker:
         # 勿扰时段：仅拦截沉默触发，不影响模型预约
         if self._is_quiet_hours():
             return False
+
+        # 用户活跃时段检查：非典型活跃时段时降低概率（乘以 0.3），而非完全阻止
+        _activity_penalty = 1.0
+        if not session.is_user_typically_active_now():
+            _activity_penalty = 0.3
+            logger.debug(
+                f"当前时段非用户典型活跃时段，降低主动发起概率: stream={session.stream_id[:8]}"
+            )
 
         proactive_config = self._config.proactive
         now = time.time()
@@ -104,13 +115,22 @@ class ProactiveThinker:
             if interval < proactive_config.min_interval:
                 return False
 
-        # 概率触发
-        if random.random() > proactive_config.trigger_probability:
+        # 概率衰减触发：沉默越久概率越高
+        base_prob = proactive_config.trigger_probability
+        threshold = proactive_config.silence_threshold
+        # 超出阈值的倍数（至少为 1）
+        excess_ratio = max(1.0, silence_duration / threshold) if threshold > 0 else 1.0
+        # 线性递增：每多一个阈值时长，概率增加 base_prob * 0.3，上限 1.0
+        effective_prob = min(1.0, base_prob * (1.0 + 0.3 * (excess_ratio - 1.0)))
+        # 非活跃时段惩罚
+        effective_prob *= _activity_penalty
+
+        if random.random() > effective_prob:
             return False
 
         logger.info(
             f"主动发起条件满足: stream={session.stream_id[:8]}, "
-            f"沉默 {silence_duration:.0f}s"
+            f"沉默 {silence_duration:.0f}s, 有效概率 {effective_prob:.2f}"
         )
         return True
 

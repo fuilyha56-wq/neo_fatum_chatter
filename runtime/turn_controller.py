@@ -220,6 +220,10 @@ async def commit_turn_decision(
         raw_response=getattr(response, "message", "") or "",
     )
 
+    # 记录情绪轨迹
+    if decision.mood:
+        session.record_mood(decision.mood)
+
     assistant_text = (getattr(response, "message", "") or "").strip()
     if not assistant_text:
         assistant_text = decision.reply_text

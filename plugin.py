@@ -30,7 +30,7 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.0.4"
+    plugin_version = "2.1.0"
     plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [NFCConfig]
@@ -66,23 +66,37 @@ class NFCPlugin(BasePlugin):
             daemon=True,
         )
 
+        # 延迟执行对话中断恢复检查
+        get_task_manager().create_task(
+            self._check_interrupted_sessions(),
+            name="NFC_session_recovery",
+            daemon=True,
+        )
+
         logger.info("NFC 插件已加载")
 
     async def _delayed_scheduler_register(self) -> None:
-        """延迟注册调度器任务，等待调度器启动（最多 30 秒）。"""
+        """延迟注册调度器任务，等待调度器启动（指数退避，最多 30 秒）。"""
         import asyncio
 
         from src.kernel.scheduler import get_unified_scheduler
 
-        for _ in range(30):
-            await asyncio.sleep(1.0)
+        delay = 0.1  # 初始等待 100ms
+        total_waited = 0.0
+        max_wait = 30.0
+
+        while total_waited < max_wait:
+            await asyncio.sleep(delay)
+            total_waited += delay
             try:
                 scheduler = get_unified_scheduler()
                 if getattr(scheduler, "_running", False):
                     await self._register_scheduler_tasks()
                     return
             except Exception:
-                continue
+                pass
+            delay = min(delay * 2, 2.0)  # 指数退避，最大 2 秒
+
         logger.warning("等待调度器启动超时(30s)，放弃注册后台任务")
 
     async def _preload_vlm_skip(self) -> None:
@@ -164,6 +178,80 @@ class NFCPlugin(BasePlugin):
             )
 
         logger.info("NFC 调度器任务注册完成")
+
+    async def _check_interrupted_sessions(self) -> None:
+        """进程重启后检查是否有中断的对话需要恢复。
+
+        检查所有已知 session，如果 DB 中存在比 session.last_activity_at 更新的消息，
+        说明重启期间有消息到达但未被处理。通过事件总线触发恢复。
+        """
+        import asyncio
+
+        # 等待系统完全启动（流管理器、DB 等就绪）
+        await asyncio.sleep(5.0)
+
+        from src.app.plugin_system.api.stream_api import get_stream_messages
+
+        config = self.config
+        if not isinstance(config, NFCConfig) or not config.general.enabled:
+            return
+
+        session_store = self._session_store
+        all_stream_ids = await session_store.list_all_stream_ids()
+
+        recovery_window = 600.0  # 只恢复最近 10 分钟内有活动的 session
+        import time as _time
+        now = _time.time()
+        recovered_count = 0
+
+        for stream_id in all_stream_ids:
+            try:
+                session = await session_store.peek(stream_id)
+                if session is None:
+                    continue
+
+                # 只检查最近有活动的 session
+                if now - session.last_activity_at > recovery_window:
+                    continue
+
+                # 查询 DB 中该流最近的消息
+                recent_msgs = await get_stream_messages(
+                    stream_id=stream_id, limit=5
+                )
+                if not recent_msgs:
+                    continue
+
+                # 检查是否有比 session 最后活动时间更新的消息
+                msg_times = []
+                for m in recent_msgs:
+                    t = getattr(m, "time", None) or getattr(m, "timestamp", None)
+                    if isinstance(t, (int, float)):
+                        msg_times.append(float(t))
+                if not msg_times:
+                    continue
+                latest_msg_time = max(msg_times)
+
+                if latest_msg_time > session.last_activity_at:
+                    # 有未处理的消息，启动该流的 Tick 驱动器
+                    from src.core.transport.distribution.stream_loop_manager import (
+                        get_stream_loop_manager,
+                    )
+
+                    slm = get_stream_loop_manager()
+                    if slm.is_running:
+                        await slm.start_stream_loop(stream_id)
+                        recovered_count += 1
+                        logger.info(
+                            f"[NFC] 对话恢复：流 {stream_id[:8]} 检测到重启期间未处理消息，已触发恢复"
+                        )
+            except Exception as exc:
+                logger.debug(f"[NFC] 对话恢复检查失败: stream={stream_id[:8]}, {exc}")
+                continue
+
+        if recovered_count > 0:
+            logger.info(f"[NFC] 对话中断恢复完成：共恢复 {recovered_count} 个会话")
+        else:
+            logger.debug("[NFC] 对话中断恢复检查完成：无需恢复")
 
     def get_components(self) -> list[type]:
         """获取插件内所有组件类。"""
