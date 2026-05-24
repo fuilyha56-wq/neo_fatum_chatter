@@ -122,6 +122,7 @@ async def execute_orchestrator(
         last_user_ts = 0.0
         chain_user_pre_saved = False
         extra_payload: LLMPayload | None = None
+        consecutive_llm_failures = 0
 
         while True:
             turn_input = await prepare_turn_input(
@@ -231,31 +232,133 @@ async def execute_orchestrator(
                     f"LLM 认证失败，请检查 API Key 配置 (model={exc.model}): {exc}",
                     exc_info=True,
                 )
+                if extra_payload_added and extra_payload is not None:
+                    response.payloads = [
+                        payload
+                        for payload in response.payloads
+                        if payload is not extra_payload
+                    ]
+                extra_payload = None
+                consecutive_llm_failures += 1
+                _fail_limit = config.general.max_consecutive_llm_failures
+                if _fail_limit > 0 and consecutive_llm_failures >= _fail_limit:
+                    logger.error(
+                        f"连续 LLM 失败已达上限 ({consecutive_llm_failures}/{_fail_limit})，终止会话循环"
+                    )
+                    await self._save_session(session)
+                    yield Failure("LLM 连续失败次数超限", exc)
+                    break
+                continue
             except LLMRateLimitError as exc:
                 logger.warning(
                     f"LLM 触发速率限制，建议等待 {exc.retry_after or '未知'} 秒后重试"
                     f" (model={exc.model}): {exc}",
                     exc_info=True,
                 )
+                if extra_payload_added and extra_payload is not None:
+                    response.payloads = [
+                        payload
+                        for payload in response.payloads
+                        if payload is not extra_payload
+                    ]
+                extra_payload = None
+                consecutive_llm_failures += 1
+                _fail_limit = config.general.max_consecutive_llm_failures
+                if _fail_limit > 0 and consecutive_llm_failures >= _fail_limit:
+                    logger.error(
+                        f"连续 LLM 失败已达上限 ({consecutive_llm_failures}/{_fail_limit})，终止会话循环"
+                    )
+                    await self._save_session(session)
+                    yield Failure("LLM 连续失败次数超限", exc)
+                    break
+                continue
             except LLMTimeoutError as exc:
                 logger.warning(
                     f"LLM 请求超时 (timeout={exc.timeout}s, model={exc.model}): {exc}",
                     exc_info=True,
                 )
+                if extra_payload_added and extra_payload is not None:
+                    response.payloads = [
+                        payload
+                        for payload in response.payloads
+                        if payload is not extra_payload
+                    ]
+                extra_payload = None
+                consecutive_llm_failures += 1
+                _fail_limit = config.general.max_consecutive_llm_failures
+                if _fail_limit > 0 and consecutive_llm_failures >= _fail_limit:
+                    logger.error(
+                        f"连续 LLM 失败已达上限 ({consecutive_llm_failures}/{_fail_limit})，终止会话循环"
+                    )
+                    await self._save_session(session)
+                    yield Failure("LLM 连续失败次数超限", exc)
+                    break
+                continue
             except LLMTokenLimitError as exc:
                 logger.error(
                     f"LLM Token 超限 (max={exc.max_tokens}, requested={exc.requested_tokens},"
                     f" model={exc.model}): {exc}",
                     exc_info=True,
                 )
+                if extra_payload_added and extra_payload is not None:
+                    response.payloads = [
+                        payload
+                        for payload in response.payloads
+                        if payload is not extra_payload
+                    ]
+                extra_payload = None
+                consecutive_llm_failures += 1
+                _fail_limit = config.general.max_consecutive_llm_failures
+                if _fail_limit > 0 and consecutive_llm_failures >= _fail_limit:
+                    logger.error(
+                        f"连续 LLM 失败已达上限 ({consecutive_llm_failures}/{_fail_limit})，终止会话循环"
+                    )
+                    await self._save_session(session)
+                    yield Failure("LLM 连续失败次数超限", exc)
+                    break
+                continue
             except LLMAPIError as exc:
                 logger.error(
                     f"LLM API 错误 (status={exc.status_code}, code={exc.error_code},"
                     f" model={exc.model}): {exc}",
                     exc_info=True,
                 )
+                if extra_payload_added and extra_payload is not None:
+                    response.payloads = [
+                        payload
+                        for payload in response.payloads
+                        if payload is not extra_payload
+                    ]
+                extra_payload = None
+                consecutive_llm_failures += 1
+                _fail_limit = config.general.max_consecutive_llm_failures
+                if _fail_limit > 0 and consecutive_llm_failures >= _fail_limit:
+                    logger.error(
+                        f"连续 LLM 失败已达上限 ({consecutive_llm_failures}/{_fail_limit})，终止会话循环"
+                    )
+                    await self._save_session(session)
+                    yield Failure("LLM 连续失败次数超限", exc)
+                    break
+                continue
             except LLMError as exc:
                 logger.error(f"LLM 请求失败: {exc}", exc_info=True)
+                if extra_payload_added and extra_payload is not None:
+                    response.payloads = [
+                        payload
+                        for payload in response.payloads
+                        if payload is not extra_payload
+                    ]
+                extra_payload = None
+                consecutive_llm_failures += 1
+                _fail_limit = config.general.max_consecutive_llm_failures
+                if _fail_limit > 0 and consecutive_llm_failures >= _fail_limit:
+                    logger.error(
+                        f"连续 LLM 失败已达上限 ({consecutive_llm_failures}/{_fail_limit})，终止会话循环"
+                    )
+                    await self._save_session(session)
+                    yield Failure("LLM 连续失败次数超限", exc)
+                    break
+                continue
             except Exception as exc:
                 logger.error(f"LLM 请求失败（未知错误）: {repr(exc)}", exc_info=True)
                 if extra_payload_added and extra_payload is not None:
@@ -268,6 +371,9 @@ async def execute_orchestrator(
                 await self._save_session(session)
                 yield Failure("LLM 请求失败", exc)
                 break
+
+            # LLM 请求成功，重置连续失败计数
+            consecutive_llm_failures = 0
 
             if extra_payload_added and extra_payload is not None:
                 response.payloads = [
