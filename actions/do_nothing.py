@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.base import BaseAction
+
+logger = get_logger("NFC_do_nothing")
 
 
 class DoNothingAction(BaseAction):
@@ -28,13 +31,18 @@ class DoNothingAction(BaseAction):
             float, "是否继续等待对方（秒），0表示不等待"
         ] = 0.0,
         mood: Annotated[str, "你当前的心情"] = "",
+        **_extra,
     ) -> tuple[bool, str]:
         """执行不回复的逻辑。
 
         参数由 chatter.py 提取用于状态记录，
         action 本身不使用这些参数。
 
+        ``**_extra`` 用于吞掉 LLM 偶尔幻觉出的未知参数，避免 TypeError。
+
         Returns:
             (True, "已选择不回复")
         """
+        if _extra:
+            logger.debug(f"忽略 do_nothing 未知参数: {sorted(_extra.keys())}")
         return True, "已选择不回复"

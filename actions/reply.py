@@ -94,13 +94,21 @@ class NFCReplyAction(BaseAction):
         max_wait_seconds: Annotated[float, "你愿意等待对方回复的最长时间(秒)，0表示不等待"] = 0.0,
         mood: Annotated[str, "你当前的心情，用一两个词描述"] = "",
         reply_to: Annotated[str, "可选，要引用回复的消息 ID"] = "",
+        **_extra,
     ):
         """执行发送文本消息的逻辑。
 
         支持异步生成器暂停点，让标准 tool 调度器能按调用顺序门控多个发送动作。
+
+        ``**_extra`` 用于吞掉 LLM 偶尔幻觉出的未知参数（例如 ``emotion_tags``），
+        避免 ``TypeError`` 中断整轮执行。schema 解析器会跳过 VAR_KEYWORD，
+        因此该参数不会出现在 Tool Schema 中。
         """
         import asyncio
         import random as _random
+
+        if _extra:
+            logger.debug(f"忽略 nfc_reply 未知参数: {sorted(_extra.keys())}")
 
         _ = thought, expected_reaction, max_wait_seconds, mood
 
