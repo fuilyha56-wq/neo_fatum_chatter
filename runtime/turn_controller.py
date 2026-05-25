@@ -27,6 +27,18 @@ if TYPE_CHECKING:
 logger = get_logger("NFC_chatter")
 
 
+def _wait_until_session_timeout(session: Any) -> Wait:
+    """按当前等待配置生成框架等待信号。"""
+    waiting_config = getattr(session, "waiting_config", None)
+    max_wait_seconds = float(getattr(waiting_config, "max_wait_seconds", 0.0) or 0.0)
+    started_at = getattr(waiting_config, "started_at", None)
+    if isinstance(started_at, (int, float)) and max_wait_seconds > 0:
+        return Wait(max(0.0, started_at + max_wait_seconds - time.time()))
+    if max_wait_seconds > 0:
+        return Wait(max_wait_seconds)
+    return Wait()
+
+
 @dataclass(slots=True)
 class TurnControlResult:
     """一轮决策提交后的控制结果。"""
@@ -169,7 +181,7 @@ async def prepare_turn_input(
             return TurnInputResult(
                 response=response,
                 unread_msgs=[],
-                next_signal=Wait(0),
+                next_signal=_wait_until_session_timeout(session),
                 continue_loop=True,
                 history_images_injected=history_images_injected,
                 has_pending_tool_results=has_pending_tool_results,
@@ -179,7 +191,7 @@ async def prepare_turn_input(
         return TurnInputResult(
             response=response,
             unread_msgs=[],
-            next_signal=Wait(0),
+            next_signal=Wait(),
             continue_loop=True,
             history_images_injected=history_images_injected,
             has_pending_tool_results=has_pending_tool_results,
@@ -312,7 +324,7 @@ async def commit_turn_decision(
         session.set_waiting(waiting_config)
         await chatter._save_session(session)
         return TurnControlResult(
-            next_signal=Wait(0),
+            next_signal=_wait_until_session_timeout(session),
             continue_loop=True,
             is_final_timeout=is_final_timeout,
         )
