@@ -12,18 +12,35 @@ import datetime
 import time
 from typing import TYPE_CHECKING, Any
 
+from src.app.plugin_system.api.llm_api import create_llm_request, get_model_set_by_task
 from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.api.stream_api import get_stream_messages
-from src.kernel.llm import LLMPayload, LLMRequest, ROLE, Text
+from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, ReminderSourceSpec, Text
 
 if TYPE_CHECKING:
     from .config import NFCConfig
     from .session import NFCSession
     from .prompts.builder import NFCPromptBuilder
 
-from src.app.plugin_system.api.llm_api import get_model_set_by_task
 
 logger = get_logger("NFC_compressor")
+
+
+def create_compress_request(model_set: Any, stream_id: str) -> Any:
+    """创建近期记忆压缩 LLM 请求。"""
+    context_manager = LLMContextManager(
+        reminder_sources=[
+            ReminderSourceSpec(
+                bucket="actor",
+                wrap_with_system_tag=True,
+            )
+        ]
+    )
+    return create_llm_request(
+        model_set,
+        f"NFC_compress_{stream_id}",
+        context_manager=context_manager,
+    )
 
 
 async def compress_history(
@@ -139,16 +156,10 @@ async def compress_history(
         "5. 不要包含任何 JSON 或结构化标记，直接输出摘要正文"
     )
 
-    # 注入 actor_reminder（如有）
-    from src.core.prompt import get_system_reminder_store
-    actor_reminder = get_system_reminder_store().get("actor")
-
     # 直接使用 actor 模型任务，避免继承对话 model_set 的 max_tokens 限制
     model_set = get_model_set_by_task(config.general.model_task)
-    llm_request = LLMRequest(model_set, f"NFC_compress_{stream_id}")
+    llm_request = create_compress_request(model_set, stream_id)
     llm_request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_prompt)))
-    if actor_reminder:
-        llm_request.add_payload(LLMPayload(ROLE.SYSTEM, Text(actor_reminder)))
     llm_request.add_payload(LLMPayload(ROLE.USER, Text(compress_instruction)))
 
     # ── 4. 调用 LLM（非流式收集全文）──

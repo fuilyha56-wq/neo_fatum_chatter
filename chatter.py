@@ -30,7 +30,7 @@ from src.app.plugin_system.base import (
 )
 from src.core.components.types import ChatType
 from src.kernel.concurrency import get_watchdog
-from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, Text
+from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, ReminderSourceSpec, Text
 
 from .debug.log_formatter import format_prompt_for_log, log_nfc_result
 from .services.context_sanitizer import prepare_payload_chain_for_send
@@ -172,12 +172,18 @@ class NeoFatumChatter(BaseChatter):
 
     # ── 核心对话循环 ──────────────────────────────────────────
 
-    async def execute(self) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:  # type: ignore[override]
+    async def execute(self) -> AsyncGenerator[Wait | Success | Failure | Stop, Any]:  # type: ignore[override]
         """执行聊天器对话循环，委托 runtime orchestrator。"""
         from .runtime import execute_orchestrator
 
-        async for result in execute_orchestrator(self):
-            yield result
+        runner = execute_orchestrator(self)
+        resume_event: Any = None
+        while True:
+            try:
+                result = await runner.asend(resume_event)
+            except StopAsyncIteration:
+                return
+            resume_event = yield result
 
     # ── LLM 上下文构建 ──────────────────────────────────────
 
@@ -202,12 +208,18 @@ class NeoFatumChatter(BaseChatter):
         Returns:
             tuple: (request, image_budget, usable_map, prompt_builder, has_history)
         """
-        context_manager = LLMContextManager()
+        context_manager = LLMContextManager(
+            reminder_sources=[
+                ReminderSourceSpec(
+                    bucket="actor",
+                    wrap_with_system_tag=True,
+                )
+            ]
+        )
         request = create_llm_request(
             model_set,
             "neo_fatum_chatter",
             context_manager=context_manager,
-            with_reminder="actor",
         )
 
         # 系统提示词

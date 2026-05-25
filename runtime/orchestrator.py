@@ -40,6 +40,18 @@ if TYPE_CHECKING:
 logger = get_logger("NFC_chatter")
 
 
+def append_temporary_payload(response: Any, payload: LLMPayload) -> list[LLMPayload]:
+    """临时追加 payload，并返回追加前快照。"""
+    snapshot = list(getattr(response, "payloads", []) or [])
+    response.add_payload(payload)
+    return snapshot
+
+
+def restore_temporary_payload(response: Any, snapshot: list[LLMPayload]) -> None:
+    """恢复临时 payload 追加前的 payload 链。"""
+    response.payloads = snapshot
+
+
 async def execute_orchestrator(
     chatter: NeoFatumChatter,
 ) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
@@ -177,10 +189,9 @@ async def execute_orchestrator(
                 await self._save_session(session)
                 chain_user_pre_saved = True
 
-            extra_payload_added = False
+            temporary_payload_snapshot: list[LLMPayload] | None = None
             if extra_payload is not None:
-                response.payloads.append(extra_payload)
-                extra_payload_added = True
+                temporary_payload_snapshot = append_temporary_payload(response, extra_payload)
             if config.debug.show_prompt:
                 self._log_prompt(response)
 
@@ -208,12 +219,8 @@ async def execute_orchestrator(
                         known_ids,
                     )
                     if interrupt_msgs:
-                        if extra_payload_added and extra_payload is not None:
-                            response.payloads = [
-                                payload
-                                for payload in response.payloads
-                                if payload is not extra_payload
-                            ]
+                        if temporary_payload_snapshot is not None:
+                            restore_temporary_payload(response, temporary_payload_snapshot)
                         extra_payload = None
                         await self.flush_unreads(unread_msgs or [])
                         session.add_interrupt_event(interrupt_msgs)
@@ -262,12 +269,8 @@ async def execute_orchestrator(
                     logger.error(f"LLM 请求失败: {exc}", exc_info=True)
 
                 # 统一清理与失败计数
-                if extra_payload_added and extra_payload is not None:
-                    response.payloads = [
-                        payload
-                        for payload in response.payloads
-                        if payload is not extra_payload
-                    ]
+                if temporary_payload_snapshot is not None:
+                    restore_temporary_payload(response, temporary_payload_snapshot)
                 extra_payload = None
                 consecutive_llm_failures += 1
                 _fail_limit = config.general.max_consecutive_llm_failures
@@ -281,12 +284,8 @@ async def execute_orchestrator(
                 continue
             except Exception as exc:
                 logger.error(f"LLM 请求失败（未知错误）: {repr(exc)}", exc_info=True)
-                if extra_payload_added and extra_payload is not None:
-                    response.payloads = [
-                        payload
-                        for payload in response.payloads
-                        if payload is not extra_payload
-                    ]
+                if temporary_payload_snapshot is not None:
+                    restore_temporary_payload(response, temporary_payload_snapshot)
                 extra_payload = None
                 await self._save_session(session)
                 yield Failure("LLM 请求失败", exc)
@@ -295,10 +294,8 @@ async def execute_orchestrator(
             # LLM 请求成功，重置连续失败计数
             consecutive_llm_failures = 0
 
-            if extra_payload_added and extra_payload is not None:
-                response.payloads = [
-                    payload for payload in response.payloads if payload is not extra_payload
-                ]
+            if temporary_payload_snapshot is not None:
+                restore_temporary_payload(response, temporary_payload_snapshot)
             extra_payload = None
 
             call_list = coerce_call_list(response)
