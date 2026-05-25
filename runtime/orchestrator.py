@@ -40,16 +40,35 @@ if TYPE_CHECKING:
 logger = get_logger("NFC_chatter")
 
 
+def _clone_payload(payload: LLMPayload) -> LLMPayload:
+    """复制 payload 外壳，避免临时追加时改写快照对象。"""
+    return LLMPayload(payload.role, list(payload.content))
+
+
 def append_temporary_payload(response: Any, payload: LLMPayload) -> list[LLMPayload]:
     """临时追加 payload，并返回追加前快照。"""
-    snapshot = list(getattr(response, "payloads", []) or [])
+    snapshot = [_clone_payload(item) for item in getattr(response, "payloads", []) or []]
+    response.payloads = [_clone_payload(item) for item in snapshot]
     response.add_payload(payload)
     return snapshot
 
 
 def restore_temporary_payload(response: Any, snapshot: list[LLMPayload]) -> None:
-    """恢复临时 payload 追加前的 payload 链。"""
-    response.payloads = snapshot
+    """移除临时 payload，保留发送后追加的响应 payload。"""
+    payloads = getattr(response, "payloads", None)
+    if not isinstance(payloads, list):
+        response.payloads = snapshot
+        return
+
+    if payloads[:len(snapshot)] == snapshot:
+        restored_tail = payloads[len(snapshot):]
+        if restored_tail:
+            response.payloads = snapshot + restored_tail[1:]
+        else:
+            response.payloads = snapshot
+        return
+
+    response.payloads = snapshot + payloads[len(snapshot):]
 
 
 async def execute_orchestrator(
