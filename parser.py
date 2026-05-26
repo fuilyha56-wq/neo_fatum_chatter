@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from src.app.plugin_system.api.log_api import get_logger
-from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall
+from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall, ToolResult
 
 from .models import DO_NOTHING, NFC_REPLY, ToolCallResult
 
@@ -61,6 +61,100 @@ def _normalize_call_name(name: str) -> str:
             return name[len(prefix) :]
 
     return name
+
+
+def _registered_tool_names(usable_map: ToolRegistry) -> set[str]:
+    """从注册表提取当前可执行工具名。"""
+    get_all_names = getattr(usable_map, "get_all_names", None)
+    if callable(get_all_names):
+        try:
+            return {str(name) for name in get_all_names()}
+        except Exception:
+            return set()
+    return set()
+
+
+def _resolve_registered_call_name(name: str, usable_map: ToolRegistry) -> str:
+    """将模型返回的短名解析为注册表中的实际工具名。"""
+    registered_names = _registered_tool_names(usable_map)
+    if not name or not registered_names or name in registered_names:
+        return name
+
+    normalized_name = _normalize_call_name(name)
+    candidates = [
+        f"action-{normalized_name}",
+        f"tool-{normalized_name}",
+        f"agent-{normalized_name}",
+    ]
+    for candidate in candidates:
+        if candidate in registered_names:
+            return candidate
+
+    matches = [
+        registered_name
+        for registered_name in registered_names
+        if _normalize_call_name(registered_name) == normalized_name
+    ]
+    return sorted(matches)[0] if len(matches) == 1 else name
+
+
+def _retarget_call_name(call: ToolCall, name: str) -> ToolCall:
+    """保持 call id/args 不变，仅替换执行用工具名。"""
+    if call.name == name:
+        return call
+    return ToolCall(id=call.id, name=name, args=call.args)
+
+
+def _tool_result_call_ids(response: Any) -> set[str]:
+    """收集 response 链中已经成功回写的 tool_result call_id。"""
+    payloads = getattr(response, "payloads", None)
+    if not isinstance(payloads, list):
+        return set()
+
+    call_ids: set[str] = set()
+    for payload in payloads:
+        if getattr(payload, "role", None) != ROLE.TOOL_RESULT:
+            continue
+        for part in getattr(payload, "content", []) or []:
+            if isinstance(part, ToolResult) and part.call_id:
+                call_ids.add(str(part.call_id))
+    return call_ids
+
+
+def _remove_failed_tool_calls(response: Any, failed_call_ids: set[str]) -> None:
+    """从本轮响应链移除没有 tool_result 闭合的失败 ToolCall。"""
+    if not failed_call_ids:
+        return
+
+    payloads = getattr(response, "payloads", None)
+    if not isinstance(payloads, list):
+        return
+
+    cleaned_payloads: list[Any] = []
+    for payload in payloads:
+        if getattr(payload, "role", None) != ROLE.ASSISTANT:
+            cleaned_payloads.append(payload)
+            continue
+
+        content = getattr(payload, "content", None)
+        if not isinstance(content, list):
+            cleaned_payloads.append(payload)
+            continue
+
+        cleaned_content = [
+            part
+            for part in content
+            if not (
+                isinstance(part, ToolCall)
+                and part.id is not None
+                and str(part.id) in failed_call_ids
+            )
+        ]
+        if cleaned_content or not content:
+            payload.content = cleaned_content
+            cleaned_payloads.append(payload)
+
+    response.payloads = cleaned_payloads
 
 
 def _extract_args(raw_args: Any) -> dict[str, Any]:
@@ -210,6 +304,7 @@ async def parse_tool_calls(
     result = ToolCallResult()
     pending_third_party_calls: list[ToolCall] = []
     standardized_calls: list[ToolCall] = []
+    failed_call_ids: set[str] = set()
     call_list = coerce_call_list(response)
 
     async def flush_pending_third_party() -> None:
@@ -220,11 +315,16 @@ async def parse_tool_calls(
         logger.debug(f"[NFC] 标准批量执行 {len(pending_third_party_calls)} 个第三方工具")
         current_pending = list(pending_third_party_calls)
         pending_third_party_calls.clear()
+        before_result_ids = _tool_result_call_ids(response)
 
         results = await run_tool_call_fn(current_pending, response, usable_map, trigger_msg)
+        after_result_ids = _tool_result_call_ids(response)
         for call, call_result in zip(current_pending, results, strict=False):
             appended, success = call_result
-            if not appended or not success:
+            has_result = call.id is not None and str(call.id) in after_result_ids - before_result_ids
+            if not has_result and (not appended or not success):
+                if call.id is not None:
+                    failed_call_ids.add(str(call.id))
                 logger.warning(
                     f"[NFC] 工具 {call.name} 执行失败或被跳过"
                     "（可能原因：工具未注册、无触发消息或执行异常）"
@@ -242,6 +342,10 @@ async def parse_tool_calls(
     # 按原始顺序整理调用，遇到 reply / do_nothing 时仍由标准调度器执行。
     for index, raw_call in enumerate(call_list):
         call = _ensure_standard_call(raw_call, index)
+        call = _retarget_call_name(
+            call,
+            _resolve_registered_call_name(call.name, usable_map),
+        )
         standardized_calls.append(call)
         args = dict(call.args) if isinstance(call.args, dict) else {}
         normalized_name = _normalize_call_name(call.name)
@@ -285,7 +389,13 @@ async def parse_tool_calls(
                     standardized_calls[-1] = call
 
             result.actions.append(action_dict)
-            await run_tool_call_fn([call], response, usable_map, trigger_msg)
+            before_result_ids = _tool_result_call_ids(response)
+            results = await run_tool_call_fn([call], response, usable_map, trigger_msg)
+            after_result_ids = _tool_result_call_ids(response)
+            has_result = call.id is not None and str(call.id) in after_result_ids - before_result_ids
+            if results and not has_result and (not results[0][0] or not results[0][1]):
+                if call.id is not None:
+                    failed_call_ids.add(str(call.id))
             continue
 
         if normalized_name == DO_NOTHING:
@@ -295,7 +405,13 @@ async def parse_tool_calls(
             action_dict = {"type": normalized_name}
             action_dict.update({key: value for key, value in args.items() if key != "reason"})
             result.actions.append(action_dict)
-            await run_tool_call_fn([call], response, usable_map, trigger_msg)
+            before_result_ids = _tool_result_call_ids(response)
+            results = await run_tool_call_fn([call], response, usable_map, trigger_msg)
+            after_result_ids = _tool_result_call_ids(response)
+            has_result = call.id is not None and str(call.id) in after_result_ids - before_result_ids
+            if results and not has_result and (not results[0][0] or not results[0][1]):
+                if call.id is not None:
+                    failed_call_ids.add(str(call.id))
             continue
 
         result.has_third_party = True
@@ -306,13 +422,20 @@ async def parse_tool_calls(
         result.actions.append(action_dict)
         pending_third_party_calls.append(call)
 
+    await flush_pending_third_party()
+    if failed_call_ids:
+        standardized_calls = [
+            call
+            for call in standardized_calls
+            if call.id is None or str(call.id) not in failed_call_ids
+        ]
+        _remove_failed_tool_calls(response, failed_call_ids)
+
     try:
         response.call_list = standardized_calls
     except Exception:
         pass
     _sync_assistant_tool_calls(response, standardized_calls)
-
-    await flush_pending_third_party()
 
     if pre_execute_hook is not None:
         pre_execute_hook(result)
