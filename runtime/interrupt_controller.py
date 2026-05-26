@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 logger = get_logger("NFC_chatter")
 
 
+async def _cancel_and_await_task(task: asyncio.Task[Any]) -> None:
+    """取消并等待任务结束，吞掉取消异常。"""
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 async def send_interruptable_response(
     chatter: NeoFatumChatter,
     response: Any,
@@ -31,15 +40,17 @@ async def send_interruptable_response(
         )
 
     tm = get_task_manager()
+    llm_coro = _llm_work()
     task_handle = tm.create_task(
-        _llm_work(),
+        llm_coro,
         name=f"NFC_llm_{chatter.stream_id[:8]}",
     )
     if task_handle.task is None:  # pragma: no cover
+        llm_coro.close()
         raise RuntimeError("task_manager 未返回有效的 Task")
     llm_task: asyncio.Task[Any] = task_handle.task
 
-    poll_interval = config.buffer.interrupt_poll_seconds
+    poll_interval = max(0.1, float(config.buffer.interrupt_poll_seconds))
 
     try:
         while not llm_task.done():

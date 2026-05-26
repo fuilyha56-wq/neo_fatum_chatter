@@ -19,7 +19,7 @@ from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, ReminderSourceSp
 
 if TYPE_CHECKING:
     from .config import NFCConfig
-    from .session import NFCSession
+    from .session import NFCSession, NFCSessionStore
     from .prompts.builder import NFCPromptBuilder
 
 
@@ -48,6 +48,7 @@ async def compress_history(
     prompt_builder: "NFCPromptBuilder",
     config: "NFCConfig",
     chat_stream: Any,
+    session_store: "NFCSessionStore | None" = None,
 ) -> None:
     """对最近 N 天的对话生成近期记忆摘要，更新 session.history_summary。
 
@@ -63,6 +64,9 @@ async def compress_history(
     """
     # 立即标记压缩时间，防止异步并发重复触发
     session.last_compress_at = time.time()
+    if session_store is not None:
+        async with session_store.lock(session.stream_id):
+            await session_store.save(session)
 
     stream_id = session.stream_id
     days = config.prompt.compress_days_window
@@ -171,13 +175,22 @@ async def compress_history(
         return
 
     if not summary:
-        logger.warning(f"[NFC] 压缩：LLM 返回空摘要，跳过")
+        logger.warning("[NFC] 压缩：LLM 返回空摘要，跳过")
         return
 
     # ── 5. 更新 session（直接替换）──
     session.history_summary = summary
     session.last_compress_at = time.time()
     session.compress_round_count = 0
+    if session_store is not None:
+        async with session_store.lock(stream_id):
+            latest_session = await session_store.get(stream_id)
+            if latest_session is not None:
+                latest_session.history_summary = summary
+                latest_session.last_compress_at = session.last_compress_at
+                latest_session.compress_round_count = 0
+                session = latest_session
+            await session_store.save(session)
     logger.info(
         f"[NFC] 近期记忆压缩完成：流 {stream_id}，"
         f"覆盖 {len(formatted_lines)} 条消息，"
