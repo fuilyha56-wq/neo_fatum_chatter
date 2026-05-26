@@ -2,6 +2,11 @@
 
 高内聚：所有图片提取、格式转换逻辑集中在此。
 低耦合：仅依赖 Message 对象的公开属性和 kernel.llm 的 Content 类型。
+
+健壮性约定：
+    - 提取阶段对脏 media（空 data、类型异常、长度异常短）静默跳过并记录 debug 日志。
+    - 构建阶段单张图片转换失败不影响其它图片，整体失败时返回纯文本 fallback。
+    - 这是“发现脏了就修”而不是“在协议层把脏数据当合法数据丢给 provider”。
 """
 
 from __future__ import annotations
@@ -9,10 +14,35 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
+from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.llm import Content, Image, Text
 
 if TYPE_CHECKING:
     from src.core.models.message import Message
+
+
+logger = get_logger("NFC_multimodal")
+
+# base64 图片数据的最小可信长度（< 此值视为脏数据）。
+# 1x1 透明 PNG 的 base64 约 96 字节，常见缩略图 > 500 字节，留较宽容差。
+_MIN_BASE64_BYTES = 64
+
+# 受支持的媒体类型集合，避免因第三方扩展插入非图像类型导致 provider 拒绝。
+_SUPPORTED_MEDIA_TYPES = frozenset({"image", "emoji"})
+
+
+def _is_valid_base64_payload(data: Any) -> bool:
+    """校验 base64 数据是否值得继续打包到 LLM payload。
+
+    这一层是“老插件式”的运行时自愈：宁可丢一张图，也别把脏数据塞进 provider。
+    """
+    if not isinstance(data, str):
+        return False
+    stripped = data.strip()
+    if not stripped:
+        return False
+    payload = stripped[len("base64|"):] if stripped.startswith("base64|") else stripped
+    return len(payload) >= _MIN_BASE64_BYTES
 
 
 @dataclass
@@ -68,9 +98,11 @@ def extract_media_from_messages(
         max_items: 最大提取数量
 
     Returns:
-        提取到的 MediaItem 列表（按消息顺序，截断至 max_items）
+        提取到的 MediaItem 列表（按消息顺序，截断至 max_items）。
+        遇到脏 media（空 data、类型异常、长度过短）会静默跳过。
     """
     items: list[MediaItem] = []
+    skipped_dirty = 0
 
     for msg in messages:
         if len(items) >= max_items:
@@ -85,20 +117,29 @@ def extract_media_from_messages(
         for media in media_list:
             if len(items) >= max_items:
                 break
-            if media.get("type") not in ("image", "emoji"):
+            if not isinstance(media, dict):
+                skipped_dirty += 1
+                continue
+            media_type = media.get("type")
+            if media_type not in _SUPPORTED_MEDIA_TYPES:
                 continue
             data = media.get("data", "")
-            if not data:
+            if not _is_valid_base64_payload(data):
+                skipped_dirty += 1
                 continue
 
             items.append(
                 MediaItem(
-                    media_type=media["type"],
+                    media_type=media_type,
                     base64_data=data,
                     source_message_id=msg_id,
                 )
             )
 
+    if skipped_dirty:
+        logger.debug(
+            f"多模态: 提取阶段跳过 {skipped_dirty} 条脏 media（空 data 或长度异常）"
+        )
     return items
 
 
@@ -113,20 +154,38 @@ def build_multimodal_content(
         media_items: 媒体条目列表
 
     Returns:
-        [Text(text), Image(data1), Image(data2), ...] 格式的 content 列表
+        ``[Text(text), Image(data1), Image(data2), ...]`` 格式的 content 列表。
+        若所有媒体都构建失败，至少返回 ``[Text(text)]``，保证文本部分不丢。
 
     Note:
         MediaItem.base64_data 已经是 ``"base64|..."`` 格式
         （来自 converter 的 ``normalize_base64``）。
         框架的 ``openai_client._image_to_data_url`` 会自动将其
         转换为 ``"data:image/png;base64,..."`` 格式。
+        单张图片构建失败（例如 base64 字段被截断）会被记录并跳过，
+        而不是中断整轮 LLM 请求。
     """
     content_list: list[Content] = [Text(text)]
+    failed = 0
     for item in media_items:
-        # 表情包类型添加标注，帮助模型区分贴纸/表情包与普通照片
-        if item.media_type == "emoji":
-            content_list.append(Text("[表情包]"))
-        content_list.append(Image(item.base64_data))
+        try:
+            if not _is_valid_base64_payload(item.base64_data):
+                failed += 1
+                continue
+            # 表情包类型添加标注，帮助模型区分贴纸/表情包与普通照片
+            if item.media_type == "emoji":
+                content_list.append(Text("[表情包]"))
+            content_list.append(Image(item.base64_data))
+        except Exception as exc:
+            failed += 1
+            logger.debug(
+                f"多模态: 单张图片构建失败已跳过 (msg={item.source_message_id}): {exc}"
+            )
+
+    if failed:
+        logger.debug(
+            f"多模态: build_multimodal_content 跳过 {failed}/{len(media_items)} 张异常图片"
+        )
     return content_list
 
 

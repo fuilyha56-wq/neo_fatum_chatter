@@ -180,17 +180,9 @@ class ProactiveHandler(BaseEventHandler):
                 logger.warning(f"启动流循环失败: {e}")
         else:
             # 热流：清除等待状态，让下一次 tick 立即唤醒
-            try:
-                from src.core.transport.distribution.stream_loop_manager import (
-                    get_stream_loop_manager,
-                )
+            from .stream_wakeup_adapter import wake_hot_stream
 
-                loop_mgr = get_stream_loop_manager()
-                removed = loop_mgr._wait_states.pop(stream_id, None)  # HACK: 需要框架公开 API (loop_mgr.wake_stream)
-                if removed:
-                    logger.debug(f"已清除流 {stream_id[:8]} 的等待状态")
-            except ImportError:
-                logger.warning("StreamLoopManager 不可用，无法清除等待状态")
+            wake_hot_stream(stream_id)
 
         return True
 

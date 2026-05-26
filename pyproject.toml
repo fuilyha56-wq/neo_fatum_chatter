@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# 这里的覆盖率不强制 100%，先把骨架与核心协议层覆盖起来。
+# 后续随插件继续重构再分批补齐。
+addopts = [
+    "-q",
+    "--no-header",
+    "--rootdir=.",
+]
+
+[tool.coverage.run]
+omit = ["tests/*", "**/__pycache__/*"]

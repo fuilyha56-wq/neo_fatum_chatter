@@ -9,18 +9,7 @@ from typing import Any
 from ..domain.decision import Decision, ProactiveSchedule, ToolCallSpec
 from ..models import DO_NOTHING, NFC_REPLY, ToolCallResult
 from ..parser import coerce_call_list, parse_tool_calls
-
-
-def _normalize_call_name(name: str) -> str:
-    """归一化工具调用名称。"""
-    if not name:
-        return ""
-    if ":" in name:
-        return name.rsplit(":", 1)[-1]
-    for prefix in ("action-", "tool-", "agent-"):
-        if name.startswith(prefix):
-            return name[len(prefix) :]
-    return name
+from .call_resolver import normalize_call_name
 
 
 def _extract_args(raw_args: Any) -> dict[str, Any]:
@@ -64,7 +53,7 @@ def build_decision(result: ToolCallResult, response: Any) -> Decision:
     call_list = coerce_call_list(response)
 
     for call in call_list:
-        normalized_name = _normalize_call_name(getattr(call, "name", ""))
+        normalized_name = normalize_call_name(getattr(call, "name", ""))
         if normalized_name in (NFC_REPLY, DO_NOTHING):
             continue
 

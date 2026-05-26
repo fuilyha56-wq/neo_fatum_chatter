@@ -30,7 +30,7 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.2.2-beta"
+    plugin_version = "2.3.0-beta"
     plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [NFCConfig]
@@ -110,6 +110,9 @@ class NFCPlugin(BasePlugin):
         注意：首次对话的新用户无法预注册，其第一条消息仍会经过 VLM。
         但由于 base64 数据始终保留在 Message.media 中，NFC 仍能正常
         提取原始图片，不影响功能正确性。
+
+        框架兼容性：若 ``MediaManager`` 不暴露 ``skip_vlm_for_stream``，
+        会被降级为 no-op，原生多模态仍可工作（仅多走一次 VLM 文本转述）。
         """
         try:
             stream_ids = await self._session_store.list_all_stream_ids()
@@ -120,8 +123,21 @@ class NFCPlugin(BasePlugin):
             from src.core.managers.media_manager import get_media_manager
 
             media_manager = get_media_manager()
+            skip_fn = getattr(media_manager, "skip_vlm_for_stream", None)
+            if not callable(skip_fn):
+                logger.info(
+                    "MediaManager 不支持 skip_vlm_for_stream，"
+                    "原生多模态降级为兼容模式"
+                )
+                return
+
             for stream_id in stream_ids:
-                media_manager.skip_vlm_for_stream(stream_id)
+                try:
+                    skip_fn(stream_id)
+                except Exception as exc:
+                    logger.debug(
+                        f"预注册 VLM 跳过失败 stream={stream_id[:8]}: {exc}"
+                    )
 
             logger.info(
                 f"已预注册 {len(stream_ids)} 个聊天流的 VLM 跳过"
