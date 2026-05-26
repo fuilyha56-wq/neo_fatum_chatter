@@ -18,9 +18,9 @@ from src.app.plugin_system.api.stream_api import get_stream_messages
 from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, ReminderSourceSpec, Text
 
 if TYPE_CHECKING:
-    from .config import NFCConfig
-    from .session import NFCSession, NFCSessionStore
-    from .prompts.builder import NFCPromptBuilder
+    from ..config import NFCConfig
+    from ..session import NFCSession, NFCSessionStore
+    from ..prompts.builder import NFCPromptBuilder
 
 
 logger = get_logger("NFC_compressor")

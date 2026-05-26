@@ -41,6 +41,7 @@ from .protocol.compat_adapter import (
     rewrite_response_as_unsent_draft,
 )
 from .protocol.decision_parser import parse_response_decision
+from .protocol.perception_retry import apply_perception_followup
 from .protocol.response_normalizer import normalize_response
 from .models import NFC_REPLY, DO_NOTHING
 from .prompts.templates import (
@@ -321,21 +322,7 @@ class NeoFatumChatter(BaseChatter):
                     f"(第 {attempt + 1} 轮): "
                     f"{perceive_text[:80]}{'...' if len(perceive_text) > 80 else ''}"
                 )
-                if not rewrite_response_as_unsent_draft(new_response, perceive_text):
-                    logger.debug("[NFC] 未能将纯文本响应改写为未发送草稿，保留原始上下文")
-
-                # 注入轻量提示，引导模型基于“未发送草稿”进入决策阶段。
-                followup = None
-                if is_deepseek_model_set(getattr(new_response, "model_set", None)):
-                    followup = build_tool_call_compat_retry_prompt(new_response.payloads)
-                    if followup:
-                        logger.debug("[NFC] DeepSeek 纯文本重试使用 compat JSON 提示")
-
-                if not followup:
-                    followup = NFC_PERCEIVE_FOLLOWUP_PROMPT_TOOL_CALLING
-                new_response.add_payload(
-                    LLMPayload(ROLE.USER, Text(followup))
-                )
+                apply_perception_followup(new_response, perceive_text)
                 response = new_response
                 continue
 
@@ -409,26 +396,24 @@ class NeoFatumChatter(BaseChatter):
 
         此方法在 execute() 开头调用，确保后续到达的消息不再触发 VLM。
         调用是幂等的——多次注册同一 stream_id 不会产生副作用。
+
+        框架兼容性：若 ``MediaManager`` 不存在 ``skip_vlm_for_stream`` 接口，
+        会被静默降级为 no-op，并由首张图片的 LLM 路径回退到框架 VLM 文本转述。
         """
         try:
             from src.core.managers.media_manager import get_media_manager
 
-            get_media_manager().skip_vlm_for_stream(self.stream_id)
+            manager = get_media_manager()
+            skip_fn = getattr(manager, "skip_vlm_for_stream", None)
+            if not callable(skip_fn):
+                logger.debug(
+                    "MediaManager 不支持 skip_vlm_for_stream，"
+                    "原生多模态降级为兼容模式（VLM 文本转述仍生效）"
+                )
+                return
+            skip_fn(self.stream_id)
         except Exception as e:
             logger.debug(f"注册 VLM 跳过失败（不影响功能）: {e}")
-
-    def _unregister_vlm_skip(self) -> None:
-        """注销当前聊天流的 VLM 跳过。
-
-        在 execute() 结束时调用（通过 try/finally），
-        恢复框架对该 stream 的 VLM 识别能力。
-        """
-        try:
-            from src.core.managers.media_manager import get_media_manager
-
-            get_media_manager().unskip_vlm_for_stream(self.stream_id)
-        except Exception as e:
-            logger.debug(f"注销 VLM 跳过失败: {e}")
 
     def _deduct_bot_sent_images(
         self,

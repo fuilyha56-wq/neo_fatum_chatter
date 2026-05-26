@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.concurrency import get_task_manager
 
-from ..compressor import compress_history, should_compress
+from .compressor import compress_history, should_compress
 
 if TYPE_CHECKING:
     from ..config import NFCConfig

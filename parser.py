@@ -15,6 +15,12 @@ from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall, ToolResult
 
 from .models import DO_NOTHING, NFC_REPLY, ToolCallResult
+from .protocol.call_resolver import (
+    normalize_call_name as _normalize_call_name,
+    registered_tool_names as _registered_tool_names,
+    resolve_registered_call_name as _resolve_registered_call_name,
+    retarget_call_name as _retarget_call_name,
+)
 
 if TYPE_CHECKING:
     from src.kernel.llm import ToolRegistry
@@ -46,63 +52,6 @@ def coerce_call_list(response: Any) -> list[Any]:
     except Exception:
         pass
     return normalized_calls
-
-
-def _normalize_call_name(name: str) -> str:
-    """归一化工具调用名称，兼容带前缀/带插件名前缀的格式。"""
-    if not name:
-        return ""
-
-    if ":" in name:
-        return name.rsplit(":", 1)[-1]
-
-    for prefix in ("action-", "tool-", "agent-"):
-        if name.startswith(prefix):
-            return name[len(prefix) :]
-
-    return name
-
-
-def _registered_tool_names(usable_map: ToolRegistry) -> set[str]:
-    """从注册表提取当前可执行工具名。"""
-    get_all_names = getattr(usable_map, "get_all_names", None)
-    if callable(get_all_names):
-        try:
-            return {str(name) for name in get_all_names()}
-        except Exception:
-            return set()
-    return set()
-
-
-def _resolve_registered_call_name(name: str, usable_map: ToolRegistry) -> str:
-    """将模型返回的短名解析为注册表中的实际工具名。"""
-    registered_names = _registered_tool_names(usable_map)
-    if not name or not registered_names or name in registered_names:
-        return name
-
-    normalized_name = _normalize_call_name(name)
-    candidates = [
-        f"action-{normalized_name}",
-        f"tool-{normalized_name}",
-        f"agent-{normalized_name}",
-    ]
-    for candidate in candidates:
-        if candidate in registered_names:
-            return candidate
-
-    matches = [
-        registered_name
-        for registered_name in registered_names
-        if _normalize_call_name(registered_name) == normalized_name
-    ]
-    return sorted(matches)[0] if len(matches) == 1 else name
-
-
-def _retarget_call_name(call: ToolCall, name: str) -> ToolCall:
-    """保持 call id/args 不变，仅替换执行用工具名。"""
-    if call.name == name:
-        return call
-    return ToolCall(id=call.id, name=name, args=call.args)
 
 
 def _tool_result_call_ids(response: Any) -> set[str]:

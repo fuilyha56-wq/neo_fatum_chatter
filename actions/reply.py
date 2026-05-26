@@ -1,73 +1,25 @@
-﻿"""NFC 回复动作。
+"""NFC 回复动作（薄壳）。
 
-包含最后一道防线：防御性清洗 content 中混入的元数据。
+真正的清洗、分段与发送逻辑在 ``execution/reply_executor.py``。
+本文件只保留 LLM 工具调用 schema 与最小的执行桥接，便于通过
+``BaseAction`` 注册到框架的 tool 路由。
 """
 
 from __future__ import annotations
 
-import json
-import re
-from typing import Annotated, Any
+import asyncio
+from typing import Annotated
 
 from src.app.plugin_system.api.log_api import get_logger
-from src.app.plugin_system.api.send_api import send_text
 from src.app.plugin_system.base import BaseAction
 
-from ..protocol.response_normalizer import strip_thinking_blocks
+from ..execution.reply_executor import (
+    coerce_content_segments,
+    sanitize_segment,
+    send_reply_segments,
+)
 
 logger = get_logger("NFC_reply")
-
-# 元数据关键字模式（最后防线）
-# 仅当多个元数据关键字同时出现时才判定为泄漏，降低误伤概率
-_METADATA_KEYWORDS = [
-    r"(?:想法|内心想法|思考|thought|thinking)\s*[:：]",
-    r"(?:预计反应|预期反应|expected_reaction)\s*[:：]",
-    r"(?:最大等待秒数|max_wait_seconds)\s*[:：]",
-    r"(?:心情|情绪|mood)\s*[:：]",
-]
-_METADATA_PATTERNS = [re.compile(kw, re.IGNORECASE) for kw in _METADATA_KEYWORDS]
-
-
-def _coerce_content_segments(content: list[str] | str | None) -> list[str]:
-    """把模型传来的 content 统一规整成可发送文本段落。
-
-    有些模型会把 `content` 错传成 JSON 字符串，例如 `["在呢。"]`。
-    如果不先解析，就会把方括号和引号原样发出去，笨蛋模型真会添乱！
-    """
-    if content is None:
-        return []
-
-    raw_items: list[Any]
-    if isinstance(content, str):
-        stripped = content.strip()
-        if not stripped:
-            return []
-
-        parsed: Any | None = None
-        if stripped.startswith("[") and stripped.endswith("]"):
-            try:
-                candidate = json.loads(stripped)
-            except (json.JSONDecodeError, ValueError):
-                candidate = None
-            if isinstance(candidate, list):
-                parsed = candidate
-
-        if isinstance(parsed, list):
-            raw_items = parsed
-        else:
-            raw_items = [stripped]
-    else:
-        raw_items = list(content)
-
-    segments: list[str] = []
-    for item in raw_items:
-        if isinstance(item, str):
-            text = item.strip()
-        else:
-            text = str(item).strip()
-        if text:
-            segments.append(text)
-    return segments
 
 
 class NFCReplyAction(BaseAction):
@@ -104,95 +56,60 @@ class NFCReplyAction(BaseAction):
         避免 ``TypeError`` 中断整轮执行。schema 解析器会跳过 VAR_KEYWORD，
         因此该参数不会出现在 Tool Schema 中。
         """
-        import asyncio
-        import random as _random
-
         if _extra:
             logger.debug(f"忽略 nfc_reply 未知参数: {sorted(_extra.keys())}")
 
         _ = thought, expected_reaction, max_wait_seconds, mood
 
-        segments = _coerce_content_segments(content)
-        if not segments:
+        raw_segments = coerce_content_segments(content)
+        if not raw_segments:
             yield False, "内容为空，未发送"
             return
 
-        # 获取段间延迟配置
+        cleaned_segments: list[str] = []
+        for segment in raw_segments:
+            cleaned, _stripped_thinking, _stripped_meta = sanitize_segment(segment)
+            if cleaned:
+                cleaned_segments.append(cleaned)
+
+        if not cleaned_segments:
+            yield False, "清洗后内容为空，未发送"
+            return
+
+        # 段间延迟从 plugin 配置读取，沿用旧路径以避免产生新的依赖入口。
         segment_delay_min = 0.5
         segment_delay_max = 2.0
         try:
             from src.app.plugin_system.api.config_api import get_config
             nfc_config = get_config("neo_fatum_chatter")
             if nfc_config:
-                segment_delay_min = getattr(
-                    getattr(nfc_config, "reply", None), "segment_delay_min", 0.5
-                )
-                segment_delay_max = getattr(
-                    getattr(nfc_config, "reply", None), "segment_delay_max", 2.0
-                )
+                reply_section = getattr(nfc_config, "reply", None)
+                segment_delay_min = float(getattr(reply_section, "segment_delay_min", 0.5))
+                segment_delay_max = float(getattr(reply_section, "segment_delay_max", 2.0))
         except Exception:
             pass
 
-        segment_delay_min = max(0.0, float(segment_delay_min))
-        segment_delay_max = max(segment_delay_min, float(segment_delay_max))
+        async def _yield_point() -> None:
+            # 让出控制权给标准 tool 调度器；保持 action 旧版的暂停语义。
+            await asyncio.sleep(0)
 
-        sent_count = 0
-        for segment in segments:
-            # 段间延迟：非首条消息前等待随机时间
-            if sent_count > 0 and segment_delay_max > 0:
-                delay = _random.uniform(segment_delay_min, segment_delay_max)
-                await asyncio.sleep(delay)
-            # 最后防线：剥离 thinking 块泄漏（DeepSeek V4 Pro Thinking 等模型偶尔会
-            # 把 <think>/<thinking> 块直接吐到正文里）
-            cleaned_segment = strip_thinking_blocks(segment)
-            if cleaned_segment != segment:
-                logger.warning(
-                    f"[最后防线] 检测到 content 中混入 thinking 块，已剥离。"
-                    f"原始长度={len(segment)}，剥离后={len(cleaned_segment)}"
-                )
-                segment = cleaned_segment
-                if not segment:
-                    continue
+        yield None
+        sent, ok = await send_reply_segments(
+            cleaned_segments,
+            stream_id=self.chat_stream.stream_id,
+            reply_to=reply_to,
+            send_segment=self._send_to_stream,
+            segment_delay_min=segment_delay_min,
+            segment_delay_max=segment_delay_max,
+            yield_point=_yield_point,
+        )
 
-            keyword_matches = [p.search(segment) for p in _METADATA_PATTERNS]
-            hit_count = sum(1 for m in keyword_matches if m is not None)
-            if hit_count >= 2:
-                earliest = min(m.start() for m in keyword_matches if m is not None)
-                cleaned = segment[:earliest].strip()
-                logger.warning(
-                    f"[最后防线] 检测到 content 中混入 {hit_count} 个元数据关键字，已截断。"
-                    f"原始长度={len(segment)}，截断后={len(cleaned)}"
-                )
-                segment = cleaned
-                if not segment:
-                    continue
-
-            yield None
-            if reply_to and sent_count == 0:
-                success = await send_text(
-                    content=segment,
-                    stream_id=self.chat_stream.stream_id,
-                    reply_to=reply_to,
-                )
-            else:
-                success = await self._send_to_stream(segment)
-            if not success:
-                logger.warning(
-                    f"消息发送失败: stream={self.chat_stream.stream_id[:8]} "
-                    f"segment={segment[:50]}{'...' if len(segment) > 50 else ''}"
-                )
-                yield False, "消息发送失败"
-                return
-            sent_count += 1
-            logger.info(
-                f"消息已发送: stream={self.chat_stream.stream_id[:8]} "
-                f"({sent_count}/{len(segments)}) "
-                f"{segment[:60]}{'...' if len(segment) > 60 else ''}"
-            )
-
-        if sent_count <= 0:
-            yield False, "清洗后内容为空，未发送"
+        if not ok:
+            yield False, "消息发送失败"
             return
-        yield True, f"已发送 {sent_count} 条消息"
 
+        if not sent:
+            yield False, "未发送任何消息"
+            return
 
+        yield True, f"已发送 {len(sent)} 条消息"
