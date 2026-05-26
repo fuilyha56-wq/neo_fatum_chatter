@@ -15,6 +15,18 @@ _VALID_CONTEXT_OWNERS = frozenset(get_args(ContextOwner))
 _VALID_CONTEXT_SCOPES = frozenset(get_args(ContextScope))
 
 
+def _normalize_placement(raw: Any) -> str:
+    """归一化上下文贡献的渲染位置。"""
+    if not isinstance(raw, dict):
+        return ""
+
+    for key in ("placement", "position"):
+        placement = str(raw.get(key) or "").strip().lower()
+        if placement == "tail":
+            return "tail"
+    return ""
+
+
 def _normalize_context_contribution(raw: Any) -> ContextContribution | None:
     """将第三方返回值归一化为 ContextContribution。"""
     if isinstance(raw, ContextContribution):
@@ -44,6 +56,7 @@ def _normalize_context_contribution(raw: Any) -> ContextContribution | None:
             ),
             content=content,
             evidence_only=bool(raw.get("evidence_only", False)),
+            placement=_normalize_placement(raw),
         )
     except Exception:
         return None
@@ -95,9 +108,10 @@ async def collect_plugin_turn_contributions(
                     source="legacy.on_prompt_build.extra",
                     owner="notice",
                     scope="turn",
-                    priority=0,
+                    priority=-100,
                     ttl_turns=1,
                     content=legacy_extra,
+                    placement="tail",
                 )
             )
 

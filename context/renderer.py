@@ -188,6 +188,7 @@ class ContextRenderer:
                 if contribution.owner == owner
             ),
             key=lambda contribution: (
+                contribution.placement == "tail",
                 -contribution.priority,
                 contribution.source,
                 contribution.content,

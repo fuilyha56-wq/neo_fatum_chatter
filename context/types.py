@@ -30,6 +30,7 @@ class ContextContribution:
     content: str
     ttl_turns: int | None = None
     evidence_only: bool = False
+    placement: str = ""
 
 
 @dataclass(slots=True)
