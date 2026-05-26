@@ -260,6 +260,7 @@ async def commit_turn_decision(
             prompt_builder,
             config,
             chat_stream,
+            chatter._get_session_store(),
         )
 
     if not decision.has_meaningful_action:

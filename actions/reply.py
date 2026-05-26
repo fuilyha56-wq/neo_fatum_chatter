@@ -133,6 +133,9 @@ class NFCReplyAction(BaseAction):
         except Exception:
             pass
 
+        segment_delay_min = max(0.0, float(segment_delay_min))
+        segment_delay_max = max(segment_delay_min, float(segment_delay_max))
+
         sent_count = 0
         for segment in segments:
             # 段间延迟：非首条消息前等待随机时间

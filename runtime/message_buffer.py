@@ -16,8 +16,8 @@ async def accumulate_message_buffer(
     config: NFCConfig,
 ) -> tuple[str, list[Any]]:
     """在积累窗口内等待并聚合连发消息。"""
-    window = config.buffer.accumulate_window
-    max_window = config.buffer.accumulate_max_window
+    window = max(0.0, float(config.buffer.accumulate_window))
+    max_window = max(window, float(config.buffer.accumulate_max_window))
 
     if window <= 0:
         return await chatter.fetch_unreads(time_format="%Y-%m-%d %H:%M:%S")

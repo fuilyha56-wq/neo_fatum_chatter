@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from pydantic import field_validator
+
 from src.app.plugin_system.base import BaseConfig, Field, SectionBase, config_section
 
 
@@ -27,7 +29,7 @@ class NFCConfig(BaseConfig):
             description="LLM 模型名称（对应 model.toml 中的 task），models 为空时使用",
         )
         models: list[str] = Field(
-            default=[],
+            default_factory=list,
             description="指定 LLM 模型列表（对应 model.toml 中的 name）。非空时覆盖 model_task，多个模型按顺序 fallback",
         )
         temperature: float = Field(
@@ -54,6 +56,10 @@ class NFCConfig(BaseConfig):
                 "优先级依次为：bot 已发 > 用户新消息 > 历史补充。"
                 "例如设为 4 时，若 bot 最近发了 1 张、用户本轮发了 2 张，则历史图片最多补 1 张。"
             ),
+        )
+        use_tool_calling: bool = Field(
+            default=True,
+            description="主动发起和超时上下文是否使用工具调用决策提示，默认启用",
         )
         max_compat_retries: int = Field(
             default=1,
@@ -270,6 +276,12 @@ class NFCConfig(BaseConfig):
                 "一次是否有新消息到达。值越小响应越快，CPU 占用略高。"
             ),
         )
+
+        @field_validator("accumulate_window", "accumulate_max_window", "interrupt_poll_seconds", mode="after")
+        @classmethod
+        def _clamp_non_negative(cls, value: float) -> float:
+            """将消息缓冲与轮询时间规整为非负数。"""
+            return max(0.0, float(value))
 
     @config_section("debug")
     class DebugSection(SectionBase):

@@ -30,7 +30,7 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.1.0"
+    plugin_version = "2.2.2-beta"
     plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [NFCConfig]
@@ -93,8 +93,8 @@ class NFCPlugin(BasePlugin):
                 if getattr(scheduler, "_running", False):
                     await self._register_scheduler_tasks()
                     return
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"等待调度器启动时获取 Scheduler 失败: {e}")
             delay = min(delay * 2, 2.0)  # 指数退避，最大 2 秒
 
         logger.warning("等待调度器启动超时(30s)，放弃注册后台任务")
