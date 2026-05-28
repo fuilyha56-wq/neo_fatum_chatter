@@ -79,6 +79,28 @@ class NeoFatumChatter(BaseChatter):
     chat_type: ChatType = ChatType.PRIVATE
     dependencies: list[str] = []
 
+    # ── 流运行时选项 ─────────────────────────────────────────
+
+    def apply_stream_runtime_options(self, chat_stream: Any) -> None:  # type: ignore[override]
+        """根据 NFC 配置决定是否覆盖主程序的 tick 间隔。
+
+        - general.enable_custom_tick_interval 为 False 时不覆盖，沿用主程序 bot.tick_interval。
+        - 为 True 时使用 general.custom_tick_interval 覆盖该 stream 的 tick 间隔。
+        - allow_message_buffer 仍遵循基类同名类属性（当前未启用，保持默认）。
+        """
+        context = getattr(chat_stream, "context", None)
+        if context is None:
+            return
+
+        config = self._get_config()
+        if config.general.enable_custom_tick_interval:
+            interval = float(config.general.custom_tick_interval)
+            if interval > 0:
+                context.tick_interval_override = interval
+
+        if self.allow_message_buffer is not None:
+            context.allow_message_buffer = bool(self.allow_message_buffer)
+
     # ── 配置与会话辅助 ──────────────────────────────────────
 
     def _get_config(self) -> NFCConfig:
