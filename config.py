@@ -122,6 +122,28 @@ class NFCConfig(BaseConfig):
                 "留空则不注入。"
             ),
         )
+        enable_custom_tick_interval: bool = Field(
+            default=False,
+            description=(
+                "是否启用 NFC 独立的主循环 tick 间隔。"
+                "关闭时跟随主程序 bot.tick_interval 全局配置；"
+                "开启时使用下方 custom_tick_interval 覆盖该 stream 的 tick 间隔。"
+            ),
+        )
+        custom_tick_interval: float = Field(
+            default=5.0,
+            description=(
+                "NFC 独立主循环 tick 间隔（秒），仅在 enable_custom_tick_interval 为 true 时生效。"
+                "过短会增加消耗，过长会降低响应速度。必须大于 0。"
+            ),
+        )
+
+        @field_validator("custom_tick_interval", mode="after")
+        @classmethod
+        def _clamp_custom_tick_interval(cls, value: float) -> float:
+            """custom_tick_interval 必须为正数。"""
+            v = float(value)
+            return v if v > 0 else 5.0
 
     @config_section("wait")
     class WaitSection(SectionBase):
