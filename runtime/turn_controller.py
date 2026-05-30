@@ -13,6 +13,7 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 from ..models import WaitingConfig
 from ..services import SummaryService
 from ..services.context_sanitizer import close_pending_tool_chain, prepare_payload_chain_for_send
+from .message_buffer import dedupe_messages_by_id
 
 if TYPE_CHECKING:
     from ..config import NFCConfig
@@ -86,6 +87,21 @@ async def prepare_turn_input(
 
     if formatted_text and unread_msgs:
         formatted_text, unread_msgs = await chatter._accumulate_messages(config)
+        unread_msgs = filter_messages_already_in_payloads(response, dedupe_messages_by_id(unread_msgs))
+        if not unread_msgs:
+            return TurnInputResult(
+                response=response,
+                unread_msgs=[],
+                next_signal=Wait(),
+                continue_loop=True,
+                history_images_injected=history_images_injected,
+                has_pending_tool_results=has_pending_tool_results,
+                is_final_timeout=is_final_timeout,
+            )
+        formatted_text = "\n".join(
+            chatter.format_message_line(message, time_format="%Y-%m-%d %H:%M:%S")
+            for message in unread_msgs
+        )
         has_pending_tool_results = False
         for msg in unread_msgs:
             sender_id = getattr(msg, "sender_id", "")
@@ -208,6 +224,51 @@ async def prepare_turn_input(
         has_pending_tool_results=has_pending_tool_results,
         is_final_timeout=is_final_timeout,
     )
+
+
+
+def filter_messages_already_in_payloads(response: Any, messages: list[Any]) -> list[Any]:
+    """过滤已存在于 response payload 文本中的 message_id。"""
+    existing_ids = _message_ids_in_payloads(response)
+    if not existing_ids:
+        return messages
+    filtered: list[Any] = []
+    for message in messages:
+        message_id = getattr(message, "message_id", None)
+        if message_id and str(message_id) in existing_ids:
+            continue
+        filtered.append(message)
+    return filtered
+
+
+def _message_ids_in_payloads(response: Any) -> set[str]:
+    """从现有 payload 文本中提取已经拼入的消息 ID。"""
+    payloads = getattr(response, "payloads", None)
+    if not isinstance(payloads, list):
+        return set()
+    ids: set[str] = set()
+    for payload in payloads:
+        content = getattr(payload, "content", None)
+        parts = content if isinstance(content, list) else [content]
+        for part in parts:
+            text = getattr(part, "text", "")
+            if not isinstance(text, str):
+                continue
+            marker = "[消息id:"
+            start = 0
+            while True:
+                idx = text.find(marker, start)
+                if idx < 0:
+                    break
+                value_start = idx + len(marker)
+                value_end = text.find("]", value_start)
+                if value_end < 0:
+                    break
+                message_id = text[value_start:value_end].strip()
+                if message_id:
+                    ids.add(message_id)
+                start = value_end + 1
+    return ids
 
 
 async def commit_turn_decision(
