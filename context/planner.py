@@ -6,7 +6,23 @@ from typing import Any
 
 from .sources.initial_source import build_initial_context_plan
 from .sources.plugin_source import collect_plugin_turn_contributions
-from .types import ContextPlan, InitialContextPlan
+from .types import ContextContribution, ContextPlan, InitialContextPlan
+
+
+def _filter_duplicate_turn_contributions(
+    formatted_unreads: str,
+    contributions: list[ContextContribution],
+) -> list[ContextContribution]:
+    """过滤已由上游附加到本轮消息中的同内容上下文。"""
+
+    if not formatted_unreads or not contributions:
+        return contributions
+
+    return [
+        contribution
+        for contribution in contributions
+        if contribution.content not in formatted_unreads
+    ]
 
 
 class ContextPlanner:
@@ -38,5 +54,9 @@ class ContextPlanner:
             prompt_name="NFC_user_prompt",
             content=user_text,
             stream_id=stream_id,
+        )
+        contributions = _filter_duplicate_turn_contributions(
+            formatted_unreads,
+            contributions,
         )
         return ContextPlan(user_text=user_text, contributions=contributions)
