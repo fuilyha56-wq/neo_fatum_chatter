@@ -236,7 +236,7 @@ def _merge_mental_log(
     since_ts: float,
 ) -> None:
     """将 mental_log 中的 BOT_PLANNING thought 合并入 lines。"""
-    from .models import NFCEventType
+    from ..models import NFCEventType
 
     mental_log = getattr(session, "mental_log", None)
     if not mental_log:
