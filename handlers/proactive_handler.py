@@ -61,8 +61,17 @@ class ProactiveHandler(BaseEventHandler):
             return EventDecision.PASS, params
 
         scheduled_reason: str = params.get("scheduled_reason", "")
+        scheduled_context: str = params.get("scheduled_context", "")
+        scheduled_start_at = params.get("scheduled_start_at")
+        scheduled_end_at = params.get("scheduled_end_at")
         try:
-            success = await self._wake_stream(stream_id, scheduled_reason)
+            success = await self._wake_stream(
+                stream_id,
+                scheduled_reason,
+                scheduled_context,
+                scheduled_start_at,
+                scheduled_end_at,
+            )
             if success:
                 logger.info(f"主动发起: 流 {stream_id[:8]} 已唤醒")
             return EventDecision.SUCCESS, params
@@ -70,7 +79,14 @@ class ProactiveHandler(BaseEventHandler):
             logger.error(f"主动发起处理异常: {e}", exc_info=True)
             return EventDecision.PASS, params
 
-    async def _wake_stream(self, stream_id: str, scheduled_reason: str = "") -> bool:
+    async def _wake_stream(
+        self,
+        stream_id: str,
+        scheduled_reason: str = "",
+        scheduled_context: str = "",
+        scheduled_start_at: float | None = None,
+        scheduled_end_at: float | None = None,
+    ) -> bool:
         """向目标流注入触发消息并唤醒流循环。
 
         Args:
@@ -157,6 +173,9 @@ class ProactiveHandler(BaseEventHandler):
                 silence_minutes=silence_minutes,
                 recent_activity=recent_activity,
                 scheduled_reason=scheduled_reason,
+                scheduled_context=scheduled_context,
+                scheduled_start_at=scheduled_start_at,
+                scheduled_end_at=scheduled_end_at,
                 use_tool_calling=use_tool_calling,
             )
         except Exception as e:
@@ -164,6 +183,15 @@ class ProactiveHandler(BaseEventHandler):
 
         # 构造系统触发消息并注入
         trigger_message = self._build_proactive_message(stream_id, chat_stream, target_user_id, proactive_content)
+        if scheduled_start_at is not None:
+            try:
+                metadata = getattr(trigger_message, "metadata", None)
+                if metadata is None:
+                    metadata = {}
+                    trigger_message.metadata = metadata
+                metadata["nfc_proactive_window"] = True
+            except Exception:
+                pass
         context.add_unread_message(trigger_message)
         logger.debug(f"已注入主动发起触发消息到流 {stream_id[:8]}")
 

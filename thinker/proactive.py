@@ -6,6 +6,7 @@ ProactiveThinker 负责在长时间沉默后评估是否主动发起对话。
 
 from __future__ import annotations
 
+import asyncio
 import random
 import time
 from typing import TYPE_CHECKING
@@ -59,6 +60,12 @@ class ProactiveThinker:
             session = await self._session_store.peek(stream_id)  # 不缓存，避免污染内存
             if session is None:
                 continue
+            # 窗口预约
+            if session.scheduled_proactive_start_at is not None:
+                if await self._check_window(stream_id, session, time.time()):
+                    triggered.append(stream_id)
+                continue
+            # 单点预约
             if session.scheduled_proactive_at is not None:
                 now = time.time()
                 if now >= session.scheduled_proactive_at:
@@ -70,6 +77,11 @@ class ProactiveThinker:
     async def _check_and_trigger(self, stream_id: str, session: NFCSession) -> bool:
         """检查单个 session 是否应触发，处理过期预约的持久化清除。"""
         now = time.time()
+
+        # 窗口预约优先
+        if session.scheduled_proactive_start_at is not None:
+            return await self._check_window(stream_id, session, now)
+
         if session.scheduled_proactive_at is not None:
             if now >= session.scheduled_proactive_at:
                 logger.info(f"主动思考：触发模型预约 stream={stream_id[:8]}")
@@ -77,6 +89,59 @@ class ProactiveThinker:
             return False
 
         return self._should_trigger(session)
+
+    async def _check_window(self, stream_id: str, session: NFCSession, now: float) -> bool:
+        """检查窗口预约是否应触发 sub-actor。"""
+        start = session.scheduled_proactive_start_at
+        end = session.scheduled_proactive_end_at
+        if start is None or end is None:
+            return False
+
+        # 窗口尚未开始
+        if now < start:
+            return False
+
+        # 窗口已过期
+        if now > end:
+            session.clear_scheduled_proactive()
+            logger.info(f"主动思考窗口已过期，清除: stream={stream_id[:8]}")
+            return False
+
+        # 达到最大尝试次数
+        max_attempts = getattr(self._config.proactive, "window_max_attempts", 3)
+        if session.scheduled_proactive_check_count >= max_attempts:
+            return False
+
+        # 检查间隔节流
+        last_check = session.scheduled_proactive_last_check_at
+        if last_check is not None and (now - last_check) < session.scheduled_proactive_check_interval:
+            return False
+
+        # 兴趣值概率门控
+        interest = max(0.0, min(1.0, session.scheduled_proactive_interest))
+        if random.random() > interest:
+            return False
+
+        # 更新检查状态
+        session.scheduled_proactive_last_check_at = now
+        session.scheduled_proactive_check_count += 1
+
+        # 询问 sub-actor
+        should_wake = await self._ask_sub_actor(stream_id, session, now)
+        if should_wake:
+            logger.info(
+                f"主动思考窗口触发: stream={stream_id[:8]}, "
+                f"check_count={session.scheduled_proactive_check_count}"
+            )
+        return should_wake
+
+    async def _ask_sub_actor(self, stream_id: str, session: NFCSession, now: float) -> bool:
+        """询问 sub-actor 是否应唤醒主 actor。
+
+        最小实现：有上下文则唤醒。后续 Task 4 接入真实模型。
+        """
+        await asyncio.sleep(0)
+        return bool(session.scheduled_proactive_context)
 
     def _should_trigger(self, session: NFCSession) -> bool:
         """判断无预约情况下是否应主动发起（沉默条件 + 衰减概率）。
@@ -156,19 +221,25 @@ class ProactiveThinker:
         except (ValueError, IndexError):
             return False
 
-    async def mark_triggered(self, stream_id: str) -> str:
-        """标记 Session 已触发主动发起，同时清除模型预约。
-
-        Returns:
-            str: 清除前的预约理由，无预约时为空字符串。
-        """
+    async def mark_triggered(self, stream_id: str) -> dict[str, object]:
+        """标记 Session 已触发主动发起，并返回预约 payload。"""
         async with self._session_store.lock(stream_id):
             session = await self._session_store.get(stream_id)
-            if session:
-                reason = session.scheduled_proactive_reason
-                session.last_proactive_at = time.time()
-                session.scheduled_proactive_at = None   # 清除已消费的预约
-                session.scheduled_proactive_reason = ""  # 同步清除预约理由
-                await self._session_store.save(session)
-                return reason
-        return ""
+            if not session:
+                return {}
+
+            payload = {
+                "scheduled_reason": session.scheduled_proactive_reason,
+                "scheduled_context": session.scheduled_proactive_context,
+                "scheduled_start_at": session.scheduled_proactive_start_at,
+                "scheduled_end_at": session.scheduled_proactive_end_at,
+                "scheduled_interest": session.scheduled_proactive_interest,
+                "from_window": session.scheduled_proactive_start_at is not None,
+            }
+            session.last_proactive_at = time.time()
+            if session.scheduled_proactive_start_at is None:
+                session.scheduled_proactive_at = None
+                session.scheduled_proactive_reason = ""
+            await self._session_store.save(session)
+            return payload
+        return {}

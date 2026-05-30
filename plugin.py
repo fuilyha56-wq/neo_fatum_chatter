@@ -173,14 +173,14 @@ class NFCPlugin(BasePlugin):
                 """定期检查是否需要主动发起。"""
                 triggered = await proactive.check_all_sessions()
                 for stream_id in triggered:
-                    scheduled_reason = await proactive.mark_triggered(stream_id)
+                    proactive_payload = await proactive.mark_triggered(stream_id)
                     logger.info(f"主动发起触发: {stream_id[:8]}")
                     # 通过事件 API 触发 chatter
                     from src.app.plugin_system.api.event_api import publish_event
 
                     await publish_event(
                         "NFC.proactive_trigger",
-                        {"stream_id": stream_id, "scheduled_reason": scheduled_reason},
+                        {"stream_id": stream_id, **proactive_payload},
                     )
 
             # 注册周期性主动发起检查任务

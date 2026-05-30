@@ -70,6 +70,26 @@ def restore_temporary_payload(response: Any, snapshot: list[LLMPayload]) -> None
     response.payloads = snapshot + payloads[len(snapshot):]
 
 
+def _handle_proactive_window_result(
+    session: Any,
+    decision: Any,
+    config: Any,
+    trigger_metadata: Any,
+) -> None:
+    """根据主 actor 结果清理或衰减主动预约窗口。"""
+    if not getattr(trigger_metadata, "get", lambda *_: None)("nfc_proactive_window"):
+        return
+
+    decay = getattr(config.proactive, "window_interest_decay", 0.35)
+    floor = getattr(config.proactive, "window_interest_floor", 0.1)
+    ProactiveService.handle_window_actor_result(
+        session,
+        replied=decision.has_reply_action,
+        decay=decay,
+        floor=floor,
+    )
+
+
 async def execute_orchestrator(
     chatter: NeoFatumChatter,
 ) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
@@ -366,6 +386,12 @@ async def execute_orchestrator(
                         chain_user_pre_saved,
                         is_final_timeout,
                     )
+                    _handle_proactive_window_result(
+                        session,
+                        decision,
+                        config,
+                        getattr(trigger_msg, "metadata", {}),
+                    )
                     is_final_timeout = turn_control.is_final_timeout
                     if turn_control.has_pending_tool_results:
                         has_pending_tool_results = True
@@ -427,6 +453,12 @@ async def execute_orchestrator(
             last_user_ts,
             chain_user_pre_saved,
             is_final_timeout,
+        )
+        _handle_proactive_window_result(
+            session,
+            decision,
+            config,
+            getattr(trigger_msg, "metadata", {}),
         )
         is_final_timeout = turn_control.is_final_timeout
 

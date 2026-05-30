@@ -96,13 +96,14 @@ async def build_proactive_context(
     silence_minutes: float,
     recent_activity: str,
     scheduled_reason: str = "",
+    scheduled_context: str = "",
+    scheduled_start_at: float | None = None,
+    scheduled_end_at: float | None = None,
     use_tool_calling: bool = True,
 ) -> str:
     """构建主动发起上下文。"""
     pm = get_prompt_manager()
     tmpl = pm.get_template("NFC_proactive_prompt")
-    if not tmpl:
-        return f"已沉默 {silence_minutes:.0f} 分钟"
 
     # 格式化沉默持续时间为可读文本
     if silence_minutes >= 60:
@@ -114,17 +115,34 @@ async def build_proactive_context(
     _ = use_tool_calling
     decision_instruction = NFC_PROACTIVE_DECISION_TOOL_CALLING
 
-    result = await (
-        tmpl.clone()
-        .set("current_time", datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
-        .set("silence_duration", silence_str)
-        .set("recent_activity", recent_activity or "（无近期活动记录）")
-        .set("proactive_decision_instruction", decision_instruction)
-        .build()
-    )
+    if tmpl:
+        result = await (
+            tmpl.clone()
+            .set("current_time", datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+            .set("silence_duration", silence_str)
+            .set("recent_activity", recent_activity or "（无近期活动记录）")
+            .set("proactive_decision_instruction", decision_instruction)
+            .build()
+        )
+    else:
+        result = f"已沉默 {silence_minutes:.0f} 分钟"
 
+    schedule_parts: list[str] = []
     if scheduled_reason:
-        result = f"【你在上次对话结束时为这次主动发起做了预约，预约理由：{scheduled_reason}】\n\n" + result
+        schedule_parts.append(f"预约理由：{scheduled_reason}")
+    if scheduled_context:
+        schedule_parts.append(f"预约上下文：{scheduled_context}")
+    if scheduled_start_at is not None and scheduled_end_at is not None:
+        start_text = datetime.datetime.fromtimestamp(scheduled_start_at).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        end_text = datetime.datetime.fromtimestamp(scheduled_end_at).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        schedule_parts.append(f"预约窗口：{start_text} - {end_text}")
+    if schedule_parts:
+        schedule_text = "；".join(schedule_parts)
+        result = f"【你之前为这次主动发起做了预约：{schedule_text}】\n\n" + result
 
     return result
 

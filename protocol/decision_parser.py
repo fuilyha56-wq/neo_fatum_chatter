@@ -25,6 +25,25 @@ def _extract_args(raw_args: Any) -> dict[str, Any]:
     return {}
 
 
+def _clamp_interest(raw_interest: Any) -> float:
+    """将主动预约兴趣值规整到 0~1。"""
+    try:
+        interest = float(raw_interest)
+    except (TypeError, ValueError):
+        interest = 1.0
+    return max(0.0, min(1.0, interest))
+
+
+def _coerce_optional_float(raw_value: Any) -> float | None:
+    """将可选浮点参数规整为 float 或 None。"""
+    if raw_value is None:
+        return None
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_visible_reply_segments(result: ToolCallResult) -> list[str]:
     """提取用户实际可见的回复段落。"""
     segments: list[str] = []
@@ -50,7 +69,10 @@ def build_decision(result: ToolCallResult, response: Any) -> Decision:
     visible_reply_segments = _extract_visible_reply_segments(result)
     third_party_calls: list[ToolCallSpec] = []
     proactive_schedule: ProactiveSchedule | None = None
-    call_list = coerce_call_list(response)
+    raw_call_list = coerce_call_list(response)
+    if not raw_call_list:
+        raw_call_list = getattr(response, "tool_calls", []) or []
+    call_list = list(raw_call_list) if isinstance(raw_call_list, tuple) else raw_call_list
 
     for call in call_list:
         normalized_name = normalize_call_name(getattr(call, "name", ""))
@@ -67,14 +89,13 @@ def build_decision(result: ToolCallResult, response: Any) -> Decision:
         )
 
         if normalized_name == "schedule_proactive":
-            delay_raw = args.get("delay_minutes", 30)
-            try:
-                delay_minutes = float(delay_raw)
-            except (TypeError, ValueError):
-                delay_minutes = 30.0
             proactive_schedule = ProactiveSchedule(
-                delay_minutes=delay_minutes,
+                delay_minutes=_coerce_optional_float(args.get("delay_minutes")),
                 reason=str(args.get("reason", "") or "").strip(),
+                start_at=str(args.get("start_at", "") or "").strip(),
+                end_at=str(args.get("end_at", "") or "").strip(),
+                context=str(args.get("context", "") or "").strip(),
+                interest=_clamp_interest(args.get("interest", 1.0)),
             )
 
     return Decision(

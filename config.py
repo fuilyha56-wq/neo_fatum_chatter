@@ -164,6 +164,21 @@ class NFCConfig(BaseConfig):
         check_interval: int = Field(
             default=60, description="主动发起检查间隔(秒)"
         )
+        window_check_interval_min: int = Field(
+            default=300, description="预约窗口内 sub-actor 检查最小间隔(秒)"
+        )
+        window_check_interval_max: int = Field(
+            default=900, description="预约窗口内 sub-actor 检查最大间隔(秒)"
+        )
+        window_interest_decay: float = Field(
+            default=0.35, description="主 actor 被唤醒但未回复时的兴趣衰减倍率"
+        )
+        window_interest_floor: float = Field(
+            default=0.1, description="预约窗口兴趣值下限"
+        )
+        window_max_attempts: int = Field(
+            default=3, description="单个预约窗口最多唤醒主 actor 的次数"
+        )
         schedule_guidance: str = Field(
             default=(
                 "预约是你和 Ta 保持长线联系的主要方式，不是偶尔才想到的工具。\n\n"

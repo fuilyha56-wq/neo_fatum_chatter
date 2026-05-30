@@ -47,6 +47,13 @@ class NFCSession:
     # 若存在，条件主动发起逻辑不生效，直到预约时间到来或被清除
     scheduled_proactive_at: float | None = None
     scheduled_proactive_reason: str = ""  # 预约时给出的理由，触发时注入提示词
+    scheduled_proactive_start_at: float | None = None
+    scheduled_proactive_end_at: float | None = None
+    scheduled_proactive_context: str = ""
+    scheduled_proactive_interest: float = 0.0
+    scheduled_proactive_last_check_at: float | None = None
+    scheduled_proactive_check_interval: float = 600.0
+    scheduled_proactive_check_count: int = 0
 
     # 心理活动流
     mental_log: MentalLog = field(default_factory=MentalLog)
@@ -168,8 +175,43 @@ class NFCSession:
             at: Unix 时间戳，None 表示清除预约
             reason: 预约理由，触发时注入提示词
         """
+        self.clear_scheduled_proactive()
         self.scheduled_proactive_at = at
         self.scheduled_proactive_reason = reason if at is not None else ""
+
+    def set_scheduled_proactive_window(
+        self,
+        start_at: float,
+        end_at: float,
+        context: str = "",
+        interest: float = 0.0,
+        check_interval_seconds: float = 600.0,
+    ) -> None:
+        """设置模型预约的主动思考窗口。"""
+        if end_at <= start_at:
+            raise ValueError("预约窗口结束时间必须晚于开始时间")
+        self.clear_scheduled_proactive()
+        self.scheduled_proactive_start_at = start_at
+        self.scheduled_proactive_end_at = end_at
+        self.scheduled_proactive_context = context
+        self.scheduled_proactive_interest = max(0.0, min(1.0, interest))
+        self.scheduled_proactive_check_interval = max(
+            300.0,
+            min(900.0, check_interval_seconds),
+        )
+        self.scheduled_proactive_check_count = 0
+
+    def clear_scheduled_proactive(self) -> None:
+        """清除模型预约的主动思考时间和窗口。"""
+        self.scheduled_proactive_at = None
+        self.scheduled_proactive_reason = ""
+        self.scheduled_proactive_start_at = None
+        self.scheduled_proactive_end_at = None
+        self.scheduled_proactive_context = ""
+        self.scheduled_proactive_interest = 0.0
+        self.scheduled_proactive_last_check_at = None
+        self.scheduled_proactive_check_interval = 600.0
+        self.scheduled_proactive_check_count = 0
 
     def record_mood(self, mood: str) -> None:
         """记录一次情绪到轨迹历史。"""
@@ -308,6 +350,13 @@ class NFCSession:
             "last_proactive_at": self.last_proactive_at,
             "scheduled_proactive_at": self.scheduled_proactive_at,
             "scheduled_proactive_reason": self.scheduled_proactive_reason,
+            "scheduled_proactive_start_at": self.scheduled_proactive_start_at,
+            "scheduled_proactive_end_at": self.scheduled_proactive_end_at,
+            "scheduled_proactive_context": self.scheduled_proactive_context,
+            "scheduled_proactive_interest": self.scheduled_proactive_interest,
+            "scheduled_proactive_last_check_at": self.scheduled_proactive_last_check_at,
+            "scheduled_proactive_check_interval": self.scheduled_proactive_check_interval,
+            "scheduled_proactive_check_count": self.scheduled_proactive_check_count,
             "mental_log": self.mental_log.to_list(),
             "total_interactions": self.total_interactions,
             "chain_payloads": self.chain_payloads,
@@ -347,6 +396,33 @@ class NFCSession:
         session.last_proactive_at = data.get("last_proactive_at")
         session.scheduled_proactive_at = data.get("scheduled_proactive_at")
         session.scheduled_proactive_reason = data.get("scheduled_proactive_reason", "")
+        session.scheduled_proactive_start_at = data.get("scheduled_proactive_start_at")
+        session.scheduled_proactive_end_at = data.get("scheduled_proactive_end_at")
+        session.scheduled_proactive_context = data.get("scheduled_proactive_context", "")
+        session.scheduled_proactive_interest = max(
+            0.0,
+            min(1.0, float(data.get("scheduled_proactive_interest", 0.0) or 0.0)),
+        )
+        session.scheduled_proactive_last_check_at = data.get(
+            "scheduled_proactive_last_check_at"
+        )
+        session.scheduled_proactive_check_interval = max(
+            300.0,
+            min(
+                900.0,
+                float(data.get("scheduled_proactive_check_interval", 600.0) or 600.0),
+            ),
+        )
+        session.scheduled_proactive_check_count = max(
+            0,
+            int(data.get("scheduled_proactive_check_count", 0) or 0),
+        )
+        if (
+            session.scheduled_proactive_start_at is not None
+            and session.scheduled_proactive_end_at is not None
+            and session.scheduled_proactive_end_at < session.scheduled_proactive_start_at
+        ):
+            session.clear_scheduled_proactive()
         session.mental_log = MentalLog.from_list(
             data.get("mental_log", []),
             max_entries=max_log_entries,

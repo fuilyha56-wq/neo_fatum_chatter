@@ -19,8 +19,12 @@ class ToolCallSpec:
 class ProactiveSchedule:
     """模型预约的下一次主动发起计划。"""
 
-    delay_minutes: float
+    delay_minutes: float | None = None
     reason: str = ""
+    start_at: str = ""
+    end_at: str = ""
+    context: str = ""
+    interest: float = 1.0
 
 
 @dataclass(slots=True)
