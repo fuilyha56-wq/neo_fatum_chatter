@@ -171,6 +171,7 @@ async def execute_orchestrator(
         history_images_injected = turn_input.history_images_injected
         has_pending_tool_results = turn_input.has_pending_tool_results
         is_final_timeout = turn_input.is_final_timeout
+        is_timeout_turn = turn_input.is_timeout_turn
 
         if turn_input.next_signal is not None:
             yield turn_input.next_signal
@@ -183,20 +184,23 @@ async def execute_orchestrator(
                 default=time.time(),
             )
 
-        new_user_text = ""
-        for payload in reversed(response.payloads):
-            if payload.role == ROLE.USER:
-                new_user_text = "".join(
-                    chunk.text  # type: ignore[attr-defined]
-                    for chunk in payload.content
-                    if isinstance(chunk, Text)
-                )
-                break
-        if new_user_text != pre_send_user_text:
-            pre_send_user_text = new_user_text
-            chain_user_pre_saved = False
+        # timeout turn 不应将 timeout 提示文本持久化进 chain，
+        # 它是运行时临时提示，不是用户真实消息。
+        if not is_timeout_turn:
+            new_user_text = ""
+            for payload in reversed(response.payloads):
+                if payload.role == ROLE.USER:
+                    new_user_text = "".join(
+                        chunk.text  # type: ignore[attr-defined]
+                        for chunk in payload.content
+                        if isinstance(chunk, Text)
+                    )
+                    break
+            if new_user_text != pre_send_user_text:
+                pre_send_user_text = new_user_text
+                chain_user_pre_saved = False
 
-        if pre_send_user_text and not chain_user_pre_saved:
+        if pre_send_user_text and not chain_user_pre_saved and not is_timeout_turn:
             session.update_chain(
                 [{"role": "user", "text": pre_send_user_text, "ts": last_user_ts}],
                 config.prompt.max_context_payloads,

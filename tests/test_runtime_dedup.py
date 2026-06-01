@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from neo_fatum_chatter.context.sources.history_source import restore_chain_payloads
+from neo_fatum_chatter.domain.session_state import (
+    NFCSession,
+    strip_persisted_system_reminders,
+)
 from neo_fatum_chatter.runtime.message_buffer import dedupe_messages_by_id
 from neo_fatum_chatter.runtime.orchestrator import (
     append_temporary_payload,
@@ -68,3 +73,60 @@ def test_restore_temporary_payload_removes_extra_context_and_keeps_assistant_tai
     restore_temporary_payload(response, snapshot)
 
     assert _texts(response) == ["message", "reply"]
+
+
+def test_strip_persisted_runtime_context_keeps_real_message() -> None:
+    text = """<system_reminder>
+[booku_memory]
+旧记忆
+</system_reminder>
+## 本轮末尾动态补充上下文
+send_to 临时上下文
+[新消息]
+[2026-05-31 12:00:00] 用户说：你好
+你发出消息已经过去 5 分钟了，对方还没有回应。
+**你发的最后一条消息**：「你好」
+<perception_completed>内部状态</perception_completed>"""
+
+    cleaned = strip_persisted_system_reminders(text)
+
+    assert "system_reminder" not in cleaned
+    assert "booku_memory" not in cleaned
+    assert "本轮末尾动态补充上下文" not in cleaned
+    assert "你发出消息已经过去" not in cleaned
+    assert "perception_completed" not in cleaned
+    assert "用户说：你好" in cleaned
+
+
+def test_update_chain_sanitizes_persisted_user_text() -> None:
+    session = NFCSession(user_id="u1", stream_id="s1")
+
+    session.update_chain(
+        [
+            {
+                "role": "user",
+                "text": "<system_reminder>\n[活跃记忆速览]\n旧内容\n</system_reminder>\n[新消息]\n用户说：在吗",
+                "ts": 1.0,
+            }
+        ],
+        max_payloads=10,
+    )
+
+    stored_text = session.chain_payloads[0]["text"]
+    assert "system_reminder" not in stored_text
+    assert "活跃记忆速览" not in stored_text
+    assert stored_text == "[新消息]\n用户说：在吗"
+
+
+def test_restore_chain_payloads_sanitizes_polluted_history() -> None:
+    payloads = restore_chain_payloads(
+        [
+            {
+                "role": "user",
+                "text": "[SYSTEM REMINDER]\n旧规则\n[新消息]\n用户说：回来了吗",
+            },
+            {"role": "assistant", "text": "回来了"},
+        ]
+    )
+
+    assert _texts(_FakeResponse(payloads)) == ["[新消息]\n用户说：回来了吗", "回来了"]

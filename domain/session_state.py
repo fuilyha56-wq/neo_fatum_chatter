@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -23,6 +24,51 @@ from ..models import NFCEventType, WaitingConfig
 from .scene_state import SceneState
 
 logger = get_logger("NFC_session_state")
+
+_SYSTEM_REMINDER_BLOCK_RE = re.compile(
+    r"\n?\s*<system_reminder>.*?</system_reminder>\s*\n?",
+    re.DOTALL,
+)
+
+_LEGACY_SYSTEM_REMINDER_BLOCK_RE = re.compile(
+    r"\n?\s*\[SYSTEM REMINDER\]\n.*?(?=\n\[[^\n\]]+\]|\Z)",
+    re.DOTALL,
+)
+
+# 匹配 timeout 提示块：以"你发出消息已经过去"或"你已经主动说了"开头的段落
+_TIMEOUT_PROMPT_RE = re.compile(
+    r"\n?(?:你发出消息已经过去|你已经主动说了)\s*\d+.*?(?=\n\[新消息\]|\n\[|\Z)",
+    re.DOTALL,
+)
+
+# 匹配 send_to 动态注入块标题
+_SEND_TO_DYNAMIC_BLOCK_RE = re.compile(
+    r"\n?## 本轮末尾动态补充上下文\n.*?(?=\n## |\n\[新消息\]|\Z)",
+    re.DOTALL,
+)
+
+# 匹配 perception 内部提示标签
+_PERCEPTION_TAG_RE = re.compile(
+    r"\n?\s*<(?:perception_completed|unsent_perception_draft|inner_response_to_silence)>.*?"
+    r"</(?:perception_completed|unsent_perception_draft|inner_response_to_silence)>\s*\n?",
+    re.DOTALL,
+)
+
+
+def strip_persisted_system_reminders(text: str) -> str:
+    """移除误写入持久历史的 system reminder 注入块及运行时临时提示。"""
+
+    cleaned = _SYSTEM_REMINDER_BLOCK_RE.sub("\n", text)
+    cleaned = _LEGACY_SYSTEM_REMINDER_BLOCK_RE.sub("\n", cleaned)
+    cleaned = _TIMEOUT_PROMPT_RE.sub("\n", cleaned)
+    cleaned = _SEND_TO_DYNAMIC_BLOCK_RE.sub("\n", cleaned)
+    cleaned = _PERCEPTION_TAG_RE.sub("\n", cleaned)
+    lines = [line.rstrip() for line in cleaned.splitlines()]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
 
 
 @dataclass
@@ -238,7 +284,20 @@ class NFCSession:
                 ASSISTANT 条目无需携带 ``ts``。
             max_payloads: 链最大条目数，超出时删除最老的条目。
         """
-        self.chain_payloads.extend(new_entries)
+        cleaned_entries: list[dict[str, Any]] = []
+        for entry in new_entries:
+            if entry.get("role") == "user":
+                cleaned_entry = dict(entry)
+                cleaned_entry["text"] = strip_persisted_system_reminders(
+                    str(cleaned_entry.get("text", "") or "")
+                )
+                if not cleaned_entry["text"]:
+                    continue
+                cleaned_entries.append(cleaned_entry)
+            else:
+                cleaned_entries.append(entry)
+
+        self.chain_payloads.extend(cleaned_entries)
         if len(self.chain_payloads) > max_payloads:
             self.chain_payloads = self.chain_payloads[-max_payloads:]
             # 确保裁剪后首条是 user，避免孤立的 assistant 导致上下文非法

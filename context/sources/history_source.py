@@ -7,6 +7,8 @@ from typing import Any
 
 from src.kernel.llm import LLMPayload, ROLE, Text
 
+from ...domain.session_state import strip_persisted_system_reminders
+
 
 def build_history_summary_payload(
     chat_stream: Any,
@@ -49,7 +51,7 @@ def restore_chain_payloads(
     payloads: list[LLMPayload] = []
     for entry in serialized_chain_payloads:
         role_str = str(entry.get("role", "") or "")
-        text = str(entry.get("text", "") or "")
+        text = strip_persisted_system_reminders(str(entry.get("text", "") or ""))
         if not text:
             continue
         if role_str == "user":
