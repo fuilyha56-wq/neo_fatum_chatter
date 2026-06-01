@@ -1,6 +1,6 @@
 # Neo Fatum Chatter (NFC)
 
-> ## v2.3.0-beta 更新（当前默认推荐）
+> ## v2.3.0-beta.1 更新（当前默认推荐）
 >
 > **结构性重构（不影响现有配置和外部行为）**
 > - 新增 `execution/` 层：把回复段落清洗、元数据/thinking 剥离、分段发送从 `actions/reply.py` 抽离到 `execution/reply_executor.py`，action 退化为薄壳。
@@ -16,10 +16,11 @@
 > - `build_multimodal_content` 单张图片构建失败不再中断整轮 LLM 请求，改为跳过单张并记录日志。
 > - `MediaManager.skip_vlm_for_stream` 不存在时降级为 no-op，原生多模态可在缺少该 API 的框架版本上继续工作。
 >
-> **测试**
-> - 新增 `tests/` 目录与首批 5 个核心测试：`call_resolver` / `reply_executor` / `multimodal` / `response_normalizer` / `context_sanitizer`，共 45 例。
-> - 通过 `cd plugins/neo_fatum_chatter && pytest tests/ -c pyproject.toml` 运行。
-
+> **上下文污染修复**
+> - 修复 timeout 临时 prompt 可能被写入 `session.chain_payloads`，导致动态秒数/等待提示污染后续上下文的问题。
+> - `update_chain()` 与 `restore_chain_payloads()` 会清理误持久化的 system reminder、send_to 动态补充块、timeout 提示和 perception 内部标签。
+> - 增加 runtime 重复上下文回归测试，覆盖持久化写入和历史恢复清理路径。
+>
 ---
 
 > **版本选择说明（重要，置顶）**
@@ -31,9 +32,9 @@
 > | `v2.0.2` | baseline 修复版 | 保留原上下文行为，含 manifest 身份修复、系统提示词空值修复、作者信息更新；没有 prefix cache 优化，适合担心缓存优化影响行为的人 |
 > | `v2.1.1` | 末代稳定版 | 插件正式更名为 Neo Fatum Chatter；继承 prefix cache 优化（去相对分钟数、冻结融合叙事）、情绪轨迹与活跃时段学习，以及新版主程序 LLM/Wait 恢复协议兼容修复 |
 > | `v2.2.2-beta` | 过渡 beta | 主要做 `runtime/orchestrator` 大幅重构与 `compressor` / `interrupt_controller` / `summary_service` 等运行时模块的调整，不含 v2.3.0-beta 的层级抽离与多模态健壮性修复 |
-> | `v2.3.0-beta` | **当前默认推荐** | 完成 `execution` / `domain` / `persistence` / `protocol` 等层级抽离，加入 VLM 多模态健壮性修复、删除 JSON 模式残留模板，并补上首批 pytest 测试 |
+> | `v2.3.0-beta.1` | **当前默认推荐** | 在 v2.3.0-beta 基础上修复 NFC 持久化 chain 的上下文污染：timeout 临时提示、system reminder、send_to 动态补充块与 perception 内部标签不会继续写入/恢复到历史 payload |
 >
-> **维护说明**：当前仅 `v2.3.0-beta` 处于主线维护。`v2.0.2` / `v2.1.1` / `v2.2.2-beta` 仅作为历史参考与回退选项保留，**不再接受 bug 修复或兼容性更新**；如遇问题请优先升级到当前默认推荐版本。
+> **维护说明**：当前仅 `v2.3.0-beta.1` 处于主线维护。`v2.0.2` / `v2.1.1` / `v2.2.2-beta` / `v2.3.0-beta` 仅作为历史参考与回退选项保留，**不再接受 bug 修复或兼容性更新**；如遇问题请优先升级到当前默认推荐版本。
 
 *Fatum — 拉丁语中"命运"的意思。*
 
