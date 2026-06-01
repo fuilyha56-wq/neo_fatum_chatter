@@ -63,6 +63,7 @@ class TurnInputResult:
     history_images_injected: bool = False
     has_pending_tool_results: bool = False
     is_final_timeout: bool = False
+    is_timeout_turn: bool = False
 
 
 async def prepare_turn_input(
@@ -84,6 +85,7 @@ async def prepare_turn_input(
     )
     extra_payload: LLMPayload | None = None
     is_final_timeout = False
+    is_timeout_turn = False
 
     if formatted_text and unread_msgs:
         formatted_text, unread_msgs = await chatter._accumulate_messages(config)
@@ -178,6 +180,7 @@ async def prepare_turn_input(
                 session,
             )
             is_final_timeout = timeout_result.is_final_timeout
+            is_timeout_turn = True
             timeout_upserted = False
             if response.payloads and response.payloads[-1].role == ROLE.USER:
                 last_payload = response.payloads[-1]
@@ -223,6 +226,7 @@ async def prepare_turn_input(
         history_images_injected=history_images_injected,
         has_pending_tool_results=has_pending_tool_results,
         is_final_timeout=is_final_timeout,
+        is_timeout_turn=is_timeout_turn,
     )
 
 
