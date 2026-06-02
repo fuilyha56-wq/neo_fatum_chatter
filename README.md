@@ -1,6 +1,30 @@
 # Neo Fatum Chatter (NFC)
 
-> ## v2.3.0-beta.1 更新（当前默认推荐）
+> ## ⚠️ v3.0.0-alpha — 实验性版本，不建议用于生产环境
+>
+> 本版本为**大规模实验性变更**，引入了完整的群聊状态机路径（DFC 模式移植）。
+> 由于涉及架构层面的新增模块和交互逻辑改动，可能存在未覆盖的边界情况。
+>
+> **如果你追求稳定性，请继续使用上一个推荐版本 `v2.3.0-beta.1`。**
+>
+> 安装指定版本：
+> ```bash
+> mpdt market install neo_fatum_chatter@2.3.0-beta.1
+> ```
+>
+> ---
+>
+> ### v3.0.0-alpha 变更概要
+>
+> - **群聊状态机（DFC 模式）**：新增 `runtime/group_orchestrator.py`、`runtime/group_gate.py`、`runtime/_group_tool_flow.py`、`protocol/group_decision.py`、`prompts/group_builder.py`、`prompts/group_templates.py`
+> - **群聊专属 Action**：`nfc_send_text`、`nfc_pass_and_wait`、`nfc_stop_conversation`
+> - **群聊 sub-agent 决策**：概率门控 + LLM 判定双层过滤
+> - **配置扩展**：新增 `[group]` 和 `[prompts]` Section
+> - **私聊隔离**：群聊路径不经过心理活动流、感知循环和中断控制器
+>
+---
+
+> ## v2.3.0-beta.1 更新（当前推荐稳定版）
 >
 > **结构性重构（不影响现有配置和外部行为）**
 > - 新增 `execution/` 层：把回复段落清洗、元数据/thinking 剥离、分段发送从 `actions/reply.py` 抽离到 `execution/reply_executor.py`，action 退化为薄壳。
@@ -29,12 +53,13 @@
 >
 > | 版本 | 定位 | 说明 |
 > |------|------|------|
-> | `v2.0.2` | baseline 修复版 | 保留原上下文行为，含 manifest 身份修复、系统提示词空值修复、作者信息更新；没有 prefix cache 优化，适合担心缓存优化影响行为的人 |
-> | `v2.1.1` | 末代稳定版 | 插件正式更名为 Neo Fatum Chatter；继承 prefix cache 优化（去相对分钟数、冻结融合叙事）、情绪轨迹与活跃时段学习，以及新版主程序 LLM/Wait 恢复协议兼容修复 |
-> | `v2.2.2-beta` | 过渡 beta | 主要做 `runtime/orchestrator` 大幅重构与 `compressor` / `interrupt_controller` / `summary_service` 等运行时模块的调整，不含 v2.3.0-beta 的层级抽离与多模态健壮性修复 |
-> | `v2.3.0-beta.1` | **当前默认推荐** | 在 v2.3.0-beta 基础上修复 NFC 持久化 chain 的上下文污染：timeout 临时提示、system reminder、send_to 动态补充块与 perception 内部标签不会继续写入/恢复到历史 payload |
+> | `v3.0.0-alpha` | ⚠️ 实验版 | 群聊状态机移植（DFC 模式），大规模新增模块，**不推荐生产使用** |
+> | `v2.3.0-beta.1` | ✅ **当前推荐稳定版** | 在 v2.3.0-beta 基础上修复 NFC 持久化 chain 的上下文污染：timeout 临时提示、system reminder、send_to 动态补充块与 perception 内部标签不会继续写入/恢复到历史 payload |
+> | `v2.2.2-beta` | 过渡 beta | 主要做 `runtime/orchestrator` 大幅重构与 `compressor` / `interrupt_controller` / `summary_service` 等运行时模块的调整 |
+> | `v2.1.1` | 末代稳定版 | 插件正式更名为 Neo Fatum Chatter；继承 prefix cache 优化、情绪轨迹与活跃时段学习 |
+> | `v2.0.2` | baseline 修复版 | 保留原上下文行为，含 manifest 身份修复、系统提示词空值修复 |
 >
-> **维护说明**：当前仅 `v2.3.0-beta.1` 处于主线维护。`v2.0.2` / `v2.1.1` / `v2.2.2-beta` / `v2.3.0-beta` 仅作为历史参考与回退选项保留，**不再接受 bug 修复或兼容性更新**；如遇问题请优先升级到当前默认推荐版本。
+> **维护说明**：`v3.0.0-alpha` 为实验性发布，仅供测试群聊功能，不建议在生产环境中使用。追求稳定性的用户请使用 `v2.3.0-beta.1`。旧版本 `v2.0.2` / `v2.1.1` / `v2.2.2-beta` 仅作为历史参考与回退选项保留，**不再接受 bug 修复或兼容性更新**。
 
 *Fatum — 拉丁语中"命运"的意思。*
 

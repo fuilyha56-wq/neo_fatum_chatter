@@ -318,6 +318,130 @@ class NFCConfig(BaseConfig):
             description="是否在日志中显示 LLM 响应的美化摘要",
         )
 
+    @config_section("group")
+    class GroupSection(SectionBase):
+        """群聊模式配置（启用后群聊走 DFC 风格状态机，私聊保持心理活动流不变）。"""
+
+        enabled: bool = Field(
+            default=False,
+            description=(
+                "是否启用群聊模式。"
+                "启用后，遇到群聊会走独立的 DFC 风格状态机（send_text/pass_and_wait/stop_conversation），"
+                "私聊保持原有的心理活动流模式不变。"
+            ),
+        )
+        response_mode: str = Field(
+            default="sub_agent",
+            description=(
+                "群聊响应模式："
+                "sub_agent—使用子代理判定是否回复(默认)；"
+                "always—收到任何消息都回复；"
+                "mention_only—只在被 @ 时回复。"
+            ),
+        )
+        base_response_probability: float = Field(
+            default=0.1,
+            description="sub_agent 模式下，本地概率直通响应的基础概率",
+        )
+        mention_bonus: float = Field(
+            default=0.7,
+            description="未读消息中提到 bot 名字时，本地直通响应概率的加成",
+        )
+        alias_bonus: float = Field(
+            default=0.4,
+            description="未读消息中提到 bot 别名时，本地直通响应概率的加成",
+        )
+        unread_message_bonus: float = Field(
+            default=0.05,
+            description="每条未读消息累加到本地直通响应概率的加成（与未读条数相乘）",
+        )
+        next_tick_reply_bonus: float = Field(
+            default=0.5,
+            description="刚回复后下一次 tick 的直通响应概率加成（保证连续对话不中断）",
+        )
+        cooldown_minutes: float = Field(
+            default=5.0,
+            description="stop_conversation 默认冷却时长(分钟)，可被工具调用参数覆盖",
+        )
+        enable_stop_direct_message_wake: bool = Field(
+            default=False,
+            description=(
+                "stop_conversation 冷却期内，被 @ 或私下点名的消息是否能唤醒 bot 提前结束冷却。"
+            ),
+        )
+        stop_direct_message_wake_probability: float = Field(
+            default=0.5,
+            description="冷却唤醒概率，0-1 之间",
+        )
+        enable_cooldown: bool = Field(
+            default=True,
+            description="stop_conversation 的冷却时间是否真正生效。关闭后 stop 只结束本轮，不产生冷却。",
+        )
+        enable_action_suspend: bool = Field(
+            default=True,
+            description="当本轮全部工具调用都是 action 时，是否注入 __SUSPEND__ 并立即挂起等待。关闭后 action-only 回合将进入 FOLLOW_UP 继续推理。",
+        )
+        enable_programmatic_controller: bool = Field(
+            default=True,
+            description="是否启用本地概率门。关闭后 sub_agent 模式下跳过本地概率直通，始终交给 LLM sub-agent 判定。",
+        )
+        native_multimodal: bool = Field(
+            default=False,
+            description="群聊路径是否启用原生多模态。启用后图片直接打包进 LLM payload。",
+        )
+        reinforce_negative_behaviors: bool = Field(
+            default=True,
+            description="是否在每轮 user prompt 的 extra 区块中再次强调负面行为约束。",
+        )
+        enable_llm_stream: bool = Field(
+            default=False,
+            description="群聊 LLM 请求是否启用流式响应。",
+        )
+
+    @config_section("prompts")
+    class PromptsSection(SectionBase):
+        """群聊提示词覆盖配置（仅群聊路径生效；空字符串表示使用内置默认值）。"""
+
+        private_theme_guide: str = Field(
+            default="",
+            description=(
+                "私聊场景引导（注入到群聊系统提示词的 theme_guide 占位符；"
+                "私聊路径已有自己的提示词体系，不读取此项）。"
+            ),
+        )
+        group_theme_guide: str = Field(
+            default="",
+            description="群聊场景引导（注入到群聊系统提示词的 theme_guide 占位符）",
+        )
+        custom_decision_prompt: str = Field(
+            default="",
+            description=(
+                "群聊系统提示词中的 custom_rules 区块（覆盖默认值）。"
+                "留空则使用内置默认提示词。"
+            ),
+        )
+        sub_agent_prompt: str = Field(
+            default="",
+            description=(
+                "群聊 sub-agent 决策系统提示词（支持 {nickname} {bot_id} {bot_id_section} 占位符）。"
+                "留空则使用内置默认值。"
+            ),
+        )
+        segment_instruction: str = Field(
+            default="",
+            description=(
+                "群聊场景下的消息分段指引（注入到系统提示词）。"
+                "留空则不注入。"
+            ),
+        )
+        wait_instruction: str = Field(
+            default="",
+            description=(
+                "群聊场景下 max_wait_seconds 的指引文本。"
+                "留空则不注入（群聊主路径默认不使用 max_wait_seconds）。"
+            ),
+        )
+
     general: GeneralSection = Field(default_factory=GeneralSection)
     wait: WaitSection = Field(default_factory=WaitSection)
     proactive: ProactiveSection = Field(default_factory=ProactiveSection)
@@ -325,3 +449,5 @@ class NFCConfig(BaseConfig):
     prompt: PromptSection = Field(default_factory=PromptSection)
     buffer: BufferSection = Field(default_factory=BufferSection)
     debug: DebugSection = Field(default_factory=DebugSection)
+    group: GroupSection = Field(default_factory=GroupSection)
+    prompts: PromptsSection = Field(default_factory=PromptsSection)

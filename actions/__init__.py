@@ -8,9 +8,15 @@
 from __future__ import annotations
 
 from .do_nothing import DoNothingAction
+from .pass_and_wait import NFCPassAndWaitAction
 from .reply import NFCReplyAction
+from .send_text import NFCSendTextAction
+from .stop_conversation import NFCStopConversationAction
 
 __all__ = [
     "DoNothingAction",
+    "NFCPassAndWaitAction",
     "NFCReplyAction",
+    "NFCSendTextAction",
+    "NFCStopConversationAction",
 ]
