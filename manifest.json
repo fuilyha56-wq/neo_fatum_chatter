@@ -1,6 +1,6 @@
 {
     "name": "neo_fatum_chatter",
-    "version": "2.3.0-beta.1",
+    "version": "3.0.0-alpha",
     "description": "Neo Fatum Chatter 对话引擎 — 基于心理活动流的私聊特化聊天器",
     "author": "Lycoris",
     "dependencies": {
@@ -26,6 +26,21 @@
         {
             "component_type": "action",
             "component_name": "schedule_proactive",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "nfc_send_text",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "nfc_pass_and_wait",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "nfc_stop_conversation",
             "dependencies": []
         },
         {

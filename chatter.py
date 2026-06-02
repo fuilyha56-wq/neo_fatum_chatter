@@ -76,7 +76,7 @@ class NeoFatumChatter(BaseChatter):
     )
 
     associated_platforms: list[str] = []
-    chat_type: ChatType = ChatType.PRIVATE
+    chat_type: ChatType = ChatType.ALL
     dependencies: list[str] = []
 
     # ── 流运行时选项 ─────────────────────────────────────────
@@ -196,10 +196,34 @@ class NeoFatumChatter(BaseChatter):
     # ── 核心对话循环 ──────────────────────────────────────────
 
     async def execute(self) -> AsyncGenerator[Wait | Success | Failure | Stop, Any]:  # type: ignore[override]
-        """执行聊天器对话循环，委托 runtime orchestrator。"""
-        from .runtime import execute_orchestrator
+        """执行聊天器对话循环。
 
-        runner = execute_orchestrator(self)
+        根据 chat_type 分流：
+        - 群聊 → 独立的 group_orchestrator（DFC 模式）
+        - 私聊 → NFC 原有的 orchestrator（心理活动流模式）
+        """
+        from src.app.plugin_system.api.stream_api import get_stream
+
+        # 判断当前 stream 是否为群聊
+        chat_stream = await get_stream(self.stream_id)
+        is_group = (
+            chat_stream is not None
+            and str(getattr(chat_stream, "chat_type", "")).lower() == "group"
+        )
+
+        config = self._get_config()
+
+        if is_group and config.group.enabled:
+            # 群聊走独立路径
+            from .runtime.group_orchestrator import execute_group_orchestrator
+
+            runner = execute_group_orchestrator(self)
+        else:
+            # 私聊走原有路径
+            from .runtime import execute_orchestrator
+
+            runner = execute_orchestrator(self)
+
         resume_event: Any = None
         while True:
             try:

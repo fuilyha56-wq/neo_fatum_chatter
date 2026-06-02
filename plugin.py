@@ -12,8 +12,11 @@ from src.app.plugin_system.base import BasePlugin, register_plugin
 from src.kernel.concurrency import get_task_manager
 
 from .actions.do_nothing import DoNothingAction
+from .actions.pass_and_wait import NFCPassAndWaitAction
 from .actions.reply import NFCReplyAction
 from .actions.schedule_proactive import ScheduleProactiveAction
+from .actions.send_text import NFCSendTextAction
+from .actions.stop_conversation import NFCStopConversationAction
 from .chatter import NeoFatumChatter
 from .config import NFCConfig
 from .handlers.proactive_handler import ProactiveHandler
@@ -30,7 +33,7 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.3.0-beta.1"
+    plugin_version = "3.0.0-alpha"
     plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [NFCConfig]
@@ -49,6 +52,12 @@ class NFCPlugin(BasePlugin):
 
         register_nfc_prompts()
         logger.info("NFC 提示词模板已注册")
+
+        # 注册群聊提示词模板
+        from .prompts.group_builder import register_nfc_group_prompts
+
+        register_nfc_group_prompts()
+        logger.info("NFC 群聊提示词模板已注册")
 
         # 将配置中的 schedule_proactive 指导语写入 Action 类变量
         config = self.config
@@ -276,5 +285,8 @@ class NFCPlugin(BasePlugin):
             NFCReplyAction,
             DoNothingAction,
             ScheduleProactiveAction,
+            NFCSendTextAction,
+            NFCPassAndWaitAction,
+            NFCStopConversationAction,
             ProactiveHandler,
         ]

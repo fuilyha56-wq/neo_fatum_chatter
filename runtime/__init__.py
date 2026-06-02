@@ -2,6 +2,7 @@
 
 from .interrupt_controller import send_interruptable_response
 from .message_buffer import accumulate_message_buffer
+from .group_orchestrator import execute_group_orchestrator
 from .orchestrator import execute_orchestrator
 from .turn_controller import (
 	TurnControlResult,
@@ -13,6 +14,7 @@ from .turn_controller import (
 __all__ = [
 	"accumulate_message_buffer",
 	"commit_turn_decision",
+	"execute_group_orchestrator",
 	"execute_orchestrator",
 	"prepare_turn_input",
 	"send_interruptable_response",
