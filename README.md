@@ -2,7 +2,7 @@
 
 > ## ⚠️ v3.0.0-alpha — 实验性版本，不建议用于生产环境
 >
-> 本版本为**大规模实验性变更**，引入了完整的群聊状态机路径（DFC 模式移植）。
+> 本版本为**大规模实验性变更**，引入了完整的群聊状态机路径。
 > 由于涉及架构层面的新增模块和交互逻辑改动，可能存在未覆盖的边界情况。
 >
 > **如果你追求稳定性，请继续使用上一个推荐版本 `v2.3.0-beta.1`。**
@@ -16,11 +16,11 @@
 >
 > ### v3.0.0-alpha 变更内容
 >
-> **新增：完整群聊支持（DFC 模式移植）**
+> **新增：完整群聊支持**
 >
-> NFC 现在可以同时处理私聊和群聊。群聊路径移植自 DefaultChatter 的四阶段状态机（WAIT_USER → MODEL_TURN → TOOL_EXEC → FOLLOW_UP），与私聊的心理活动流完全隔离。
+> NFC 现在可以同时处理私聊和群聊。群聊路径采用独立设计的四阶段状态机（WAIT_USER → MODEL_TURN → TOOL_EXEC → FOLLOW_UP），与私聊的心理活动流完全隔离。
 >
-> - **四阶段群聊状态机** — 照搬 DFC session.py 的 FSM 逻辑，包括工具调用控制流、SUSPEND 挂起机制、纯文本 fallback 处理、stop 冷却与直唤配置
+> - **四阶段群聊状态机** — 独立的 FSM 架构，包括工具调用控制流、SUSPEND 挂起机制、纯文本 fallback 处理、stop 冷却与直唤配置
 > - **双层群聊门控** — 本地概率门（基础概率 + 名字命中加成 + 别名加成 + 未读条数加成 + 上次回复后加成）+ LLM sub-agent 判定；支持三种模式：`always` / `mention_only` / `sub_agent`
 > - **三个群聊专属 Action**：
 >   - `nfc_send_text` — 发送文本消息，支持 reply_to 引用和 @ 对象解析，发送成功后自动提升下一 tick 响应概率
@@ -36,7 +36,7 @@
 > **设计原则**
 >
 > - 群聊和私聊完全隔离：群聊不经过 mental_log / chain_payloads / scene_state / interrupt_controller / NFCSession / perceive_loop
-> - Action 名称使用 `nfc_*` 前缀，避免与 DFC 同时加载时冲突
+> - Action 名称使用 `nfc_*` 前缀，避免与系统中其他 chatter 插件的 action 命名冲突
 > - `chatter.py` 通过 `chat_type` 分流，群聊直接进 `group_orchestrator`，私聊走原有 `orchestrator`
 >
 > **启用方式**
@@ -79,7 +79,7 @@
 >
 > | 版本 | 定位 | 说明 |
 > |------|------|------|
-> | `v3.0.0-alpha` | ⚠️ 实验版 | 群聊状态机移植（DFC 模式），大规模新增模块，**不推荐生产使用** |
+> | `v3.0.0-alpha` | ⚠️ 实验版 | 新增群聊状态机支持，大规模新增模块，**不推荐生产使用** |
 > | `v2.3.0-beta.1` | ✅ **当前推荐稳定版** | 在 v2.3.0-beta 基础上修复 NFC 持久化 chain 的上下文污染：timeout 临时提示、system reminder、send_to 动态补充块与 perception 内部标签不会继续写入/恢复到历史 payload |
 > | `v2.2.2-beta` | 过渡 beta | 主要做 `runtime/orchestrator` 大幅重构与 `compressor` / `interrupt_controller` / `summary_service` 等运行时模块的调整 |
 > | `v2.1.1` | 末代稳定版 | 插件正式更名为 Neo Fatum Chatter；继承 prefix cache 优化、情绪轨迹与活跃时段学习 |
