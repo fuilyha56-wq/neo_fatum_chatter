@@ -14,13 +14,39 @@
 >
 > ---
 >
-> ### v3.0.0-alpha 变更概要
+> ### v3.0.0-alpha 变更内容
 >
-> - **群聊状态机（DFC 模式）**：新增 `runtime/group_orchestrator.py`、`runtime/group_gate.py`、`runtime/_group_tool_flow.py`、`protocol/group_decision.py`、`prompts/group_builder.py`、`prompts/group_templates.py`
-> - **群聊专属 Action**：`nfc_send_text`、`nfc_pass_and_wait`、`nfc_stop_conversation`
-> - **群聊 sub-agent 决策**：概率门控 + LLM 判定双层过滤
-> - **配置扩展**：新增 `[group]` 和 `[prompts]` Section
-> - **私聊隔离**：群聊路径不经过心理活动流、感知循环和中断控制器
+> **新增：完整群聊支持（DFC 模式移植）**
+>
+> NFC 现在可以同时处理私聊和群聊。群聊路径移植自 DefaultChatter 的四阶段状态机（WAIT_USER → MODEL_TURN → TOOL_EXEC → FOLLOW_UP），与私聊的心理活动流完全隔离。
+>
+> - **四阶段群聊状态机** — 照搬 DFC session.py 的 FSM 逻辑，包括工具调用控制流、SUSPEND 挂起机制、纯文本 fallback 处理、stop 冷却与直唤配置
+> - **双层群聊门控** — 本地概率门（基础概率 + 名字命中加成 + 别名加成 + 未读条数加成 + 上次回复后加成）+ LLM sub-agent 判定；支持三种模式：`always` / `mention_only` / `sub_agent`
+> - **三个群聊专属 Action**：
+>   - `nfc_send_text` — 发送文本消息，支持 reply_to 引用和 @ 对象解析，发送成功后自动提升下一 tick 响应概率
+>   - `nfc_pass_and_wait` — 登记等待，可选指定等待秒数
+>   - `nfc_stop_conversation` — 结束当前对话轮次并进入可配置冷却期
+> - **群聊提示词体系** — 独立的系统/用户/sub-agent 三套模板，通过 PromptManager 注册，支持 `[prompts]` config section 覆盖
+> - **群聊原生多模态** — 复用 NFC 自有的 multimodal 模块（含 emoji/表情包支持和脏数据校验），独立于私聊的图片预算体系
+> - **群聊工具调用控制流** — 跨轮去重、同轮去重、pass/stop 控制 call 拦截、action-only 轮次 SUSPEND 注入
+> - **配置扩展**：
+>   - `[group]` Section — 启用开关、响应模式、概率参数、冷却时长、直唤配置、action suspend 开关、programmatic controller 开关、native multimodal、负面行为强化、LLM 流式响应
+>   - `[prompts]` Section — 群聊场景引导、自定义决策提示词、sub-agent 系统提示词、分段指引、等待指引覆盖
+>
+> **设计原则**
+>
+> - 群聊和私聊完全隔离：群聊不经过 mental_log / chain_payloads / scene_state / interrupt_controller / NFCSession / perceive_loop
+> - Action 名称使用 `nfc_*` 前缀，避免与 DFC 同时加载时冲突
+> - `chatter.py` 通过 `chat_type` 分流，群聊直接进 `group_orchestrator`，私聊走原有 `orchestrator`
+>
+> **启用方式**
+>
+> 在 `config/plugins/neo_fatum_chatter/config.toml` 中：
+> ```toml
+> [group]
+> enabled = true
+> response_mode = "sub_agent"  # 或 "always" / "mention_only"
+> ```
 >
 ---
 
