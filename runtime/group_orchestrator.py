@@ -24,6 +24,12 @@ from src.core.components.base import WaitResumeEvent
 from src.core.models.message import Message
 from src.core.models.stream import ChatStream
 from src.kernel.llm import LLMPayload, ROLE, Text
+from src.kernel.llm.context_structure import validate_payload_sequence
+from src.kernel.llm.context_budget import (
+    build_qa_groups,
+    flatten_groups,
+    split_pinned_prefix,
+)
 
 from ._group_tool_flow import (
     ToolCallOutcome,
@@ -83,6 +89,27 @@ def _has_tool_result_tail(response: Any) -> bool:
     """检查 response 的 payloads 末尾是否为 TOOL_RESULT。"""
     payloads = getattr(response, "payloads", None)
     return bool(payloads and payloads[-1].role == ROLE.TOOL_RESULT)
+
+
+def _trim_response_payloads(response: Any, max_groups: int) -> None:
+    """按 user 锚点分组，仅保留最近 max_groups 个 QA 组，避免群聊上下文无限膨胀。
+
+    pinned 前缀（system / tool）始终保留；可裁剪尾部按 user 起点划分为若干分组，
+    与 kernel 的 trim_payloads_by_tokens 同源策略，确保 tool_call 和后续
+    tool_result 留在同一组内不会被切断。max_groups <= 0 时不裁剪。
+    """
+    if max_groups <= 0:
+        return
+    payloads = getattr(response, "payloads", None)
+    if not payloads:
+        return
+    pinned, tail = split_pinned_prefix(payloads)
+    groups = build_qa_groups(tail)
+    if len(groups) <= max_groups:
+        return
+    kept = groups[-max_groups:]
+    new_payloads = pinned + flatten_groups(kept)
+    response.payloads = new_payloads
 
 
 def _consume_step_data(state: _GroupState) -> dict[str, Any]:
@@ -150,8 +177,12 @@ def _build_actor_decision_panel(chat_stream: ChatStream, response: Any) -> str:
 def _pick_trigger_message(
     chat_stream: ChatStream,
     state: _GroupState,
-) -> Message | None:
-    """选择触发消息供 Action 使用。"""
+) -> Message:
+    """选择触发消息供 Action 使用。
+
+    当所有真实消息源均为空时，构造一个虚拟 trigger message 以确保
+    FOLLOW_UP / timer resume 等场景下工具调用不会因 trigger_msg=None 被跳过。
+    """
     if state.unreads:
         return state.unreads[-1]
 
@@ -162,7 +193,21 @@ def _pick_trigger_message(
         return context.unread_messages[-1]
     if context.history_messages:
         return context.history_messages[-1]
-    return None
+
+    from uuid import uuid4
+    from src.core.models.message import MessageType
+
+    return Message(
+        message_id=f"nfc_group_virtual_{uuid4().hex}",
+        content="",
+        processed_plain_text="",
+        message_type=MessageType.TEXT,
+        sender_id="",
+        sender_name="",
+        platform=chat_stream.platform,
+        chat_type=chat_stream.chat_type,
+        stream_id=chat_stream.stream_id,
+    )
 
 
 async def execute_group_orchestrator(
@@ -403,6 +448,9 @@ async def execute_group_orchestrator(
         # ══════ MODEL_TURN 阶段 ══════
         if state.phase == _Phase.MODEL_TURN:
             try:
+                # ── 上下文裁剪：避免群聊跨轮 payload 累积导致连接异常 ──
+                _trim_response_payloads(state.response, config.group.max_context_groups)
+
                 # ── 3g. LLM 流式响应 ──
                 use_stream = bool(config.group.enable_llm_stream)
 

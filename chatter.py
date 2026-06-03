@@ -84,19 +84,25 @@ class NeoFatumChatter(BaseChatter):
     def apply_stream_runtime_options(self, chat_stream: Any) -> None:  # type: ignore[override]
         """根据 NFC 配置决定是否覆盖主程序的 tick 间隔。
 
-        - general.enable_custom_tick_interval 为 False 时不覆盖，沿用主程序 bot.tick_interval。
-        - 为 True 时使用 general.custom_tick_interval 覆盖该 stream 的 tick 间隔。
-        - allow_message_buffer 仍遵循基类同名类属性（当前未启用，保持默认）。
+        - 群聊 stream (chat_type == "group") 跳过 tick_interval_override，始终跟随主程序
+          bot.tick_interval，与 DefaultChatter 行为一致。
+        - 私聊 stream：general.enable_custom_tick_interval 为 False 时不覆盖，沿用主程序
+          bot.tick_interval；为 True 时使用 general.custom_tick_interval 覆盖该 stream
+          的 tick 间隔。
+        - allow_message_buffer 不区分群聊/私聊，仍遵循基类同名类属性。
         """
         context = getattr(chat_stream, "context", None)
         if context is None:
             return
 
-        config = self._get_config()
-        if config.general.enable_custom_tick_interval:
-            interval = float(config.general.custom_tick_interval)
-            if interval > 0:
-                context.tick_interval_override = interval
+        is_group = str(getattr(chat_stream, "chat_type", "")).lower() == "group"
+
+        if not is_group:
+            config = self._get_config()
+            if config.general.enable_custom_tick_interval:
+                interval = float(config.general.custom_tick_interval)
+                if interval > 0:
+                    context.tick_interval_override = interval
 
         if self.allow_message_buffer is not None:
             context.allow_message_buffer = bool(self.allow_message_buffer)
