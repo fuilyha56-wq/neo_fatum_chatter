@@ -356,7 +356,7 @@ class NFCConfig(BaseConfig):
             description="每条未读消息累加到本地直通响应概率的加成（与未读条数相乘）",
         )
         next_tick_reply_bonus: float = Field(
-            default=0.5,
+            default=0.15,
             description="刚回复后下一次 tick 的直通响应概率加成（保证连续对话不中断）",
         )
         cooldown_minutes: float = Field(
@@ -396,6 +396,15 @@ class NFCConfig(BaseConfig):
         enable_llm_stream: bool = Field(
             default=False,
             description="群聊 LLM 请求是否启用流式响应。",
+        )
+        max_context_groups: int = Field(
+            default=8,
+            description=(
+                "群聊路径保留的最近 QA 组数。每组对应一次 USER→ASSISTANT(可能含 tool_call→tool_result)→... 完整对话。"
+                "群聊状态机跨轮持有同一个 LLMResponse；不裁剪时 payload 会持续累积，"
+                "上下文逼近模型 max_context 时可能触发 Connection error / 服务端拒大请求。"
+                "设为 0 关闭裁剪（不推荐）。"
+            ),
         )
 
     @config_section("prompts")
