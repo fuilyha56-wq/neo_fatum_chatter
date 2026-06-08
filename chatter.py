@@ -1,4 +1,4 @@
-﻿"""NeoFatumChatter 核心聊天器。
+"""NeoFatumChatter 核心聊天器。
 
 实现完整的心理活动流对话循环：
 1. 构建 LLM 上下文（系统提示 + 活动流 + 未读消息）
@@ -17,8 +17,6 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from src.app.plugin_system.api.llm_api import (
     create_llm_request,
-    get_model_set_by_task,
-    get_model_set_by_name,
 )
 from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.base import (
@@ -30,23 +28,13 @@ from src.app.plugin_system.base import (
 )
 from src.core.components.types import ChatType
 from src.kernel.concurrency import get_watchdog
-from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, ReminderSourceSpec, Text
+from src.kernel.llm import LLMContextManager, ReminderSourceSpec
 
-from .debug.log_formatter import format_prompt_for_log, log_nfc_result
+from .debug.log_formatter import format_prompt_for_log
 from .services.context_sanitizer import prepare_payload_chain_for_send
-from .protocol.compat_adapter import (
-    build_tool_call_compat_retry_prompt,
-    is_deepseek_model_set,
-    prepare_nfc_model_set,
-    rewrite_response_as_unsent_draft,
-)
-from .protocol.decision_parser import parse_response_decision
 from .protocol.perception_retry import apply_perception_followup
 from .protocol.response_normalizer import normalize_response
 from .models import NFC_REPLY, DO_NOTHING
-from .prompts.templates import (
-    NFC_PERCEIVE_FOLLOWUP_PROMPT_TOOL_CALLING,
-)
 
 if TYPE_CHECKING:
     from src.core.models.stream import ChatStream

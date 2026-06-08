@@ -1,8 +1,8 @@
-﻿"""NFC 第三方上下文贡献接入点。"""
+"""NFC 第三方上下文贡献接入点。"""
 
 from __future__ import annotations
 
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 from src.app.plugin_system.api.log_api import get_logger
 
@@ -34,8 +34,8 @@ def _normalize_context_contribution(raw: Any) -> ContextContribution | None:
 
         return ContextContribution(
             source=str(raw.get("source", "plugin.on_prompt_build") or "plugin.on_prompt_build"),
-            owner=normalized_owner,
-            scope=normalized_scope,
+            owner=cast(ContextOwner, normalized_owner),
+            scope=cast(ContextScope, normalized_scope),
             priority=int(raw.get("priority", 0) or 0),
             ttl_turns=(
                 int(raw["ttl_turns"])

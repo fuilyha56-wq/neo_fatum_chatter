@@ -1,4 +1,4 @@
-﻿"""NFC 消息积累窗口运行时。"""
+"""NFC 消息积累窗口运行时。"""
 
 from __future__ import annotations
 

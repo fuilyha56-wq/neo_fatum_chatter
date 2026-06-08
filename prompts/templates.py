@@ -1,4 +1,4 @@
-﻿"""NFC 提示词模板文本定义。
+"""NFC 提示词模板文本定义。
 
 所有模板使用 Python format 占位符 {key} 语法。
 当前 NFC 已经统一走"原生 Tool Calling"协议，历史的 JSON 模式残留模板
