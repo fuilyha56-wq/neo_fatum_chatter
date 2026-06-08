@@ -1,4 +1,4 @@
-﻿"""NeoFatumChatter 数据模型。
+"""NeoFatumChatter 数据模型。
 
 定义所有共享数据类型：事件类型枚举、等待配置、工具调用解析结果等。
 """

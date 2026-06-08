@@ -1,4 +1,4 @@
-﻿"""NFC 上下文规划器。"""
+"""NFC 上下文规划器。"""
 
 from __future__ import annotations
 

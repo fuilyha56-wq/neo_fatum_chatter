@@ -7,6 +7,7 @@ from neo_fatum_chatter.domain.session_state import (
     NFCSession,
     strip_persisted_system_reminders,
 )
+import neo_fatum_chatter.runtime.interrupt_controller as interrupt_controller
 from neo_fatum_chatter.runtime.message_buffer import dedupe_messages_by_id
 from neo_fatum_chatter.runtime.orchestrator import (
     append_temporary_payload,
@@ -18,6 +19,12 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 
 class _FakeMessage:
     def __init__(self, message_id: str, text: str) -> None:
+        self.message_id = message_id
+        self.processed_plain_text = text
+
+
+class _FakeMaybeIdMessage:
+    def __init__(self, message_id: str | None, text: str) -> None:
         self.message_id = message_id
         self.processed_plain_text = text
 
@@ -62,6 +69,16 @@ def test_filter_messages_already_in_payloads_skips_replayed_message_id() -> None
     fresh = _FakeMessage("m2", "new")
 
     assert filter_messages_already_in_payloads(response, [replayed, fresh]) == [fresh]
+
+
+def test_filter_interrupt_messages_ignores_messages_without_id() -> None:
+    known_ids = frozenset({"m1"})
+    old_without_id = _FakeMaybeIdMessage(None, "旧消息")
+    new_with_id = _FakeMaybeIdMessage("m2", "新消息")
+
+    assert interrupt_controller.filter_interrupt_messages(
+        [old_without_id, new_with_id], known_ids
+    ) == [new_with_id]
 
 
 def test_restore_temporary_payload_removes_extra_context_and_keeps_assistant_tail() -> None:

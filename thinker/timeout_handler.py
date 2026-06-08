@@ -1,4 +1,4 @@
-﻿"""超时处理器。
+"""超时处理器。
 
 TimeoutHandler 在等待超时后生成决策提示，
 供 Chatter 的 execute() 在下一轮循环中使用。

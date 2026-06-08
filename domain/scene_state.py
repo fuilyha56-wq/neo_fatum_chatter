@@ -1,9 +1,9 @@
-﻿"""NFC 场景状态模型。"""
+"""NFC 场景状态模型。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 
 SceneCertainty = Literal["unknown", "weak", "confirmed"]
@@ -54,7 +54,7 @@ class SceneEvidence:
         return cls(
             source=str(data.get("source", "") or ""),
             content=str(data.get("content", "") or ""),
-            kind=kind,
+            kind=cast(SceneEvidenceKind, kind),
             confidence=float(confidence),
         )
 
@@ -94,7 +94,7 @@ class SceneState:
         ]
 
         return cls(
-            certainty=certainty,
+            certainty=cast(SceneCertainty, certainty),
             location_type=str(data.get("location_type", "unknown") or "unknown"),
             social_channel=str(data.get("social_channel", "") or ""),
             device_assumption_allowed=bool(data.get("device_assumption_allowed", False)),

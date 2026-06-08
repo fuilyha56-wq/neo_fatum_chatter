@@ -1,6 +1,10 @@
 # Neo Fatum Chatter (NFC)
 
-> ## v2.3.0-beta.1 更新（当前默认推荐）
+> ## v2.3.1 更新（当前默认推荐）
+>
+> **正式版发布**
+> - 从 `v2.3.0-beta.1` 升级为正式版 `v2.3.1`，作为当前默认推荐版本。
+> - 修复 NFC 动作组件注册兼容性：`nfc_reply` / `do_nothing` / `schedule_proactive` 均显式声明 `associated_types = ["text"]`，避免新版框架加载时报 `associated_types 必须是非空 list`。
 >
 > **结构性重构（不影响现有配置和外部行为）**
 > - 新增 `execution/` 层：把回复段落清洗、元数据/thinking 剥离、分段发送从 `actions/reply.py` 抽离到 `execution/reply_executor.py`，action 退化为薄壳。
@@ -32,9 +36,9 @@
 > | `v2.0.2` | baseline 修复版 | 保留原上下文行为，含 manifest 身份修复、系统提示词空值修复、作者信息更新；没有 prefix cache 优化，适合担心缓存优化影响行为的人 |
 > | `v2.1.1` | 末代稳定版 | 插件正式更名为 Neo Fatum Chatter；继承 prefix cache 优化（去相对分钟数、冻结融合叙事）、情绪轨迹与活跃时段学习，以及新版主程序 LLM/Wait 恢复协议兼容修复 |
 > | `v2.2.2-beta` | 过渡 beta | 主要做 `runtime/orchestrator` 大幅重构与 `compressor` / `interrupt_controller` / `summary_service` 等运行时模块的调整，不含 v2.3.0-beta 的层级抽离与多模态健壮性修复 |
-> | `v2.3.0-beta.1` | **当前默认推荐** | 在 v2.3.0-beta 基础上修复 NFC 持久化 chain 的上下文污染：timeout 临时提示、system reminder、send_to 动态补充块与 perception 内部标签不会继续写入/恢复到历史 payload |
+> | `v2.3.1` | **当前默认推荐** | v2.3 正式版：继承 v2.3.0-beta.1 的上下文污染修复，并补齐 NFC 三个 Action 的 `associated_types = ["text"]` 注册声明，兼容新版框架 Action 校验 |
 >
-> **维护说明**：当前仅 `v2.3.0-beta.1` 处于主线维护。`v2.0.2` / `v2.1.1` / `v2.2.2-beta` / `v2.3.0-beta` 仅作为历史参考与回退选项保留，**不再接受 bug 修复或兼容性更新**；如遇问题请优先升级到当前默认推荐版本。
+> **维护说明**：当前仅 `v2.3.1` 处于主线维护。`v2.0.2` / `v2.1.1` / `v2.2.2-beta` / `v2.3.0-beta` / `v2.3.0-beta.1` 仅作为历史参考与回退选项保留，**不再接受 bug 修复或兼容性更新**；如遇问题请优先升级到当前默认推荐版本。
 
 *Fatum — 拉丁语中"命运"的意思。*
 

@@ -109,6 +109,36 @@ async def test_send_reply_segments_all_ok():
 
 
 @pytest.mark.asyncio
+async def test_send_reply_segments_uses_injected_reply_sender_for_reply_to():
+    calls = []
+
+    async def send_segment(text: str) -> bool:
+        raise AssertionError(f"普通发送不应处理引用首段: {text}")
+
+    async def send_reply_to_segment(text: str, stream_id: str, reply_to: str) -> bool:
+        calls.append((text, stream_id, reply_to))
+        return True
+
+    async def fast_sleeper(_seconds: float) -> None:
+        return None
+
+    sent, ok = await send_reply_segments(
+        ["a"],
+        stream_id="abcdef12",
+        reply_to="m1",
+        send_segment=send_segment,
+        send_reply_to_segment=send_reply_to_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        sleeper=fast_sleeper,
+    )
+
+    assert ok is True
+    assert sent == ["a"]
+    assert calls == [("a", "abcdef12", "m1")]
+
+
+@pytest.mark.asyncio
 async def test_send_reply_segments_empty_input():
     async def send_segment(text: str) -> bool:  # pragma: no cover
         raise AssertionError("不应被调用")

@@ -1,4 +1,4 @@
-﻿"""主动发起事件处理器。
+"""主动发起事件处理器。
 
 订阅 ``NFC.proactive_trigger`` 事件，
 将系统触发消息注入目标流的 unread_messages 并唤醒流循环，
