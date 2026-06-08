@@ -1,4 +1,4 @@
-﻿"""NFC 超时服务。"""
+"""NFC 超时服务。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from src.app.plugin_system.api.log_api import get_logger
-from src.kernel.llm import LLMPayload, ROLE, Text
+from src.kernel.llm import LLMPayload
 
 from .context_sanitizer import close_pending_tool_chain
 

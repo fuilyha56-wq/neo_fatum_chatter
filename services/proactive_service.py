@@ -1,4 +1,4 @@
-﻿"""NFC 主动思考服务。"""
+"""NFC 主动思考服务。"""
 
 from __future__ import annotations
 

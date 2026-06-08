@@ -1,4 +1,4 @@
-﻿"""NFC 提示词构建器。
+"""NFC 提示词构建器。
 
 NFCPromptBuilder 负责在 execute() 中构建完整的系统提示词，
 以及对话循环中的 User Payload 和 Timeout Payload。

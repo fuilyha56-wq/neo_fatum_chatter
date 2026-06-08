@@ -1,8 +1,7 @@
-﻿"""NFC 初始上下文的 session/source 规划辅助。"""
+"""NFC 初始上下文的 session/source 规划辅助。"""
 
 from __future__ import annotations
 
-import time
 from datetime import datetime
 from typing import Any
 

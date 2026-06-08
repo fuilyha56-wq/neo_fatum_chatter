@@ -1,4 +1,4 @@
-﻿"""NFC 内部决策协议。"""
+"""NFC 内部决策协议。"""
 
 from __future__ import annotations
 

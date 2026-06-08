@@ -1,4 +1,4 @@
-﻿"""NFC 响应标准化。"""
+"""NFC 响应标准化。"""
 
 from __future__ import annotations
 

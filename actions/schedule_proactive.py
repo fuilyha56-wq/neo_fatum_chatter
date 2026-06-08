@@ -1,4 +1,4 @@
-﻿"""ScheduleProactive 动作。
+"""ScheduleProactive 动作。
 
 允许 LLM 预约下一次主动思考的时间。
 预约存在时，条件主动发起逻辑暂停，直到预约时间到达。
@@ -32,6 +32,7 @@ class ScheduleProactiveAction(BaseAction):
     action_name: str = "schedule_proactive"
     action_description: str = _BASE_DESCRIPTION
     chatter_allow: list[str] = ["neo_fatum_chatter"]
+    associated_types = ["text"]
 
     # 可配置的指导语（由插件在 on_plugin_loaded 时从 config 写入，初始为空）
     _guidance: ClassVar[str] = ""

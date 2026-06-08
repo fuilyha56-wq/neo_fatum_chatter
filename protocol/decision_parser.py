@@ -1,4 +1,4 @@
-﻿"""NFC 决策对象构建。"""
+"""NFC 决策对象构建。"""
 
 from __future__ import annotations
 

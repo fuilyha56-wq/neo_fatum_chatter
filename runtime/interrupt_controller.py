@@ -1,4 +1,4 @@
-﻿"""NFC 打断控制运行时。"""
+"""NFC 打断控制运行时。"""
 
 from __future__ import annotations
 
@@ -14,6 +14,21 @@ if TYPE_CHECKING:
 
 
 logger = get_logger("NFC_chatter")
+
+
+def filter_interrupt_messages(
+    messages: list[Any],
+    known_unread_ids: frozenset[str],
+) -> list[Any]:
+    """筛选可用于打断当前 LLM 请求的新消息。"""
+    interrupt_msgs: list[Any] = []
+    for message in messages:
+        message_id = getattr(message, "message_id", None)
+        if not message_id:
+            continue
+        if str(message_id) not in known_unread_ids:
+            interrupt_msgs.append(message)
+    return interrupt_msgs
 
 
 async def _cancel_and_await_task(task: asyncio.Task[Any]) -> None:
@@ -61,11 +76,7 @@ async def send_interruptable_response(
             _, current_msgs = await chatter.fetch_unreads(
                 time_format="%Y-%m-%d %H:%M:%S"
             )
-            interrupt_msgs = [
-                message
-                for message in current_msgs
-                if getattr(message, "message_id", None) not in known_unread_ids
-            ]
+            interrupt_msgs = filter_interrupt_messages(current_msgs, known_unread_ids)
             if interrupt_msgs:
                 llm_task.cancel()
                 try:
