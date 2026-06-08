@@ -1,4 +1,4 @@
-﻿"""NeoFatumChatter 配置定义。
+"""NeoFatumChatter 配置定义。
 
 定义插件所有可配置参数，基于 Pydantic + TOML 热重载。
 通过 @config_section 划分为语义清晰的 Section。
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 from src.app.plugin_system.base import BaseConfig, Field, SectionBase, config_section
 
@@ -167,6 +167,16 @@ class NFCConfig(BaseConfig):
                 return 0.0
             return max(self.min_seconds, min(raw_seconds, self.max_seconds))
 
+        @model_validator(mode="after")
+        def _order_wait_bounds(self) -> "NFCConfig.WaitSection":
+            """确保等待上下限顺序正确。"""
+            self.min_seconds = max(0.0, float(self.min_seconds))
+            self.max_seconds = max(0.0, float(self.max_seconds))
+            if self.min_seconds > self.max_seconds:
+                self.min_seconds, self.max_seconds = self.max_seconds, self.min_seconds
+            self.max_consecutive_timeouts = max(0, int(self.max_consecutive_timeouts))
+            return self
+
     @config_section("proactive")
     class ProactiveSection(SectionBase):
         """主动发起配置。"""
@@ -204,6 +214,21 @@ class NFCConfig(BaseConfig):
             description="schedule_proactive 工具的使用场景指导（会展示在工具描述中，可按需自定义）",
         )
 
+        @field_validator("trigger_probability", mode="after")
+        @classmethod
+        def _clamp_trigger_probability(cls, value: float) -> float:
+            """将主动触发概率限制在 [0, 1]。"""
+            return max(0.0, min(float(value), 1.0))
+
+        @field_validator("min_interval", "check_interval", mode="after")
+        @classmethod
+        def _positive_intervals(cls, value: int, info) -> int:
+            """主动触发间隔必须为正数。"""
+            v = int(value)
+            if v > 0:
+                return v
+            return 1800 if info.field_name == "min_interval" else 60
+
     @config_section("reply")
     class ReplySection(SectionBase):
         """回复配置。"""
@@ -240,6 +265,20 @@ class NFCConfig(BaseConfig):
             default=0.1,
             description="流式回复每次追加之间的间隔(秒)",
         )
+
+        @model_validator(mode="after")
+        def _order_segment_delay_bounds(self) -> "NFCConfig.ReplySection":
+            """规整多段回复延迟范围。"""
+            if float(self.segment_delay_min) < 0:
+                self.segment_delay_min = 0.5
+            if float(self.segment_delay_max) < 0:
+                self.segment_delay_max = 2.0
+            if self.segment_delay_min > self.segment_delay_max:
+                self.segment_delay_min, self.segment_delay_max = (
+                    self.segment_delay_max,
+                    self.segment_delay_min,
+                )
+            return self
 
     @config_section("prompt")
     class PromptSection(SectionBase):

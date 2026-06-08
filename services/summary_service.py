@@ -1,4 +1,4 @@
-﻿"""NFC 近期摘要服务。"""
+"""NFC 近期摘要服务。"""
 
 from __future__ import annotations
 

@@ -34,6 +34,7 @@ class NFCReplyAction(BaseAction):
     )
 
     chatter_allow: list[str] = ["neo_fatum_chatter"]
+    associated_types = ["text"]
 
     async def execute(
         self,

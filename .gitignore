@@ -1,28 +1,46 @@
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.pyo
 *.so
-
-# Distribution
-*.egg-info/
-*.egg
-dist/
+.Python
 build/
-*.mfp
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# IDE
-.idea/
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDEs
 .vscode/
+.idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Environment
-.env
-.venv/
-venv/
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MoFox-Bot specific
+config/local_*.toml
+*.log

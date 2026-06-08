@@ -1,4 +1,4 @@
-﻿"""NFC 历史上下文 source 辅助。"""
+"""NFC 历史上下文 source 辅助。"""
 
 from __future__ import annotations
 

@@ -1,8 +1,7 @@
-﻿"""NFC 上下文渲染器。"""
+"""NFC 上下文渲染器。"""
 
 from __future__ import annotations
 
-import datetime
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -65,7 +64,7 @@ class ContextRenderer:
 
         system_prompt = await system_prompt_builder(
             chat_stream,
-            extra_vars=plan.system_extra_vars,
+            plan.system_extra_vars,
         )
         payloads.append(LLMPayload(ROLE.SYSTEM, Text(system_prompt)))
 

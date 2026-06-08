@@ -1,4 +1,4 @@
-﻿"""NeoFatumChatter 插件入口。
+"""NeoFatumChatter 插件入口。
 
 注册插件、加载配置、注册提示词模板、初始化 Scheduler 任务。
 """

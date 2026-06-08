@@ -1,4 +1,4 @@
-﻿"""NFC 工具调用解析器。
+"""NFC 工具调用解析器。
 
 这一版保留原插件全部能力，但把实际执行统一收敛到 MoFox 标准
 `BaseChatter.run_tool_call()` / `src.core.utils.llm_tool_call.run_tool_call()` 链路。
@@ -17,7 +17,6 @@ from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall, ToolResult
 from .models import DO_NOTHING, NFC_REPLY, ToolCallResult
 from .protocol.call_resolver import (
     normalize_call_name as _normalize_call_name,
-    registered_tool_names as _registered_tool_names,
     resolve_registered_call_name as _resolve_registered_call_name,
     retarget_call_name as _retarget_call_name,
 )

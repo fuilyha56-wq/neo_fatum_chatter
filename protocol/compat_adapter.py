@@ -1,4 +1,4 @@
-﻿"""NFC provider 兼容适配。"""
+"""NFC provider 兼容适配。"""
 
 from __future__ import annotations
 

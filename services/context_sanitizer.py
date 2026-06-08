@@ -1,4 +1,4 @@
-﻿"""NFC LLM payload 链路清洗工具。"""
+"""NFC LLM payload 链路清洗工具。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿"""NFC 回合提交控制。"""
+"""NFC 回合提交控制。"""
 
 from __future__ import annotations
 

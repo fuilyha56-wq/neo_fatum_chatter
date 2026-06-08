@@ -1,4 +1,4 @@
-﻿"""NFC 近期记忆压缩模块。
+"""NFC 近期记忆压缩模块。
 
 异步生成"近期记忆摘要"（history_summary），覆盖最近 N 天的对话。
 使用 actor 模型任务（config.general.model_task），以完整人设 + 第一人称书写，直接替换旧摘要。

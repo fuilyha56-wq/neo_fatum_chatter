@@ -119,6 +119,11 @@ def sanitize_segment(segment: str) -> tuple[str, bool, bool]:
     return cleaned, stripped_thinking, stripped_metadata
 
 
+async def _send_reply_to_stream(text: str, stream_id: str, reply_to: str) -> bool:
+    """发送引用回复文本。"""
+    return await send_text(content=text, stream_id=stream_id, reply_to=reply_to)
+
+
 async def send_reply_segments(
     segments: list[str],
     *,
@@ -129,6 +134,7 @@ async def send_reply_segments(
     segment_delay_max: float,
     sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
     yield_point: Callable[[], Awaitable[None]] | None = None,
+    send_reply_to_segment: Callable[[str, str, str], Awaitable[bool]] | None = None,
 ) -> tuple[list[str], bool]:
     """串行发送已经清洗过的段落。
 
@@ -161,11 +167,8 @@ async def send_reply_segments(
             await yield_point()
 
         if reply_to and index == 0:
-            success = await send_text(
-                content=segment,
-                stream_id=stream_id,
-                reply_to=reply_to,
-            )
+            reply_sender = send_reply_to_segment or _send_reply_to_stream
+            success = await reply_sender(segment, stream_id, reply_to)
         else:
             success = await send_segment(segment)
 

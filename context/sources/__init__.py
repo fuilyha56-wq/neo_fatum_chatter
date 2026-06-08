@@ -1,4 +1,4 @@
-﻿"""NFC 上下文 source 导出。"""
+"""NFC 上下文 source 导出。"""
 
 from .history_source import (
 	build_current_time_payload,
