@@ -20,6 +20,7 @@ from .protocol.call_resolver import (
     resolve_registered_call_name as _resolve_registered_call_name,
     retarget_call_name as _retarget_call_name,
 )
+from .services.perception_extractor import extract_reply_from_perception
 
 if TYPE_CHECKING:
     from src.kernel.llm import ToolRegistry
@@ -323,16 +324,24 @@ async def parse_tool_calls(
             if content_is_empty:
                 draft_text = _extract_perception_draft(response)
                 if draft_text:
-                    logger.info(
-                        f"[NFC] nfc_reply content 为空，回填感知阶段草稿: "
-                        f"{draft_text[:80]}{'...' if len(draft_text) > 80 else ''}"
+                    # 使用 sub actor 从感知草稿中提取可发送内容
+                    extracted = await extract_reply_from_perception(
+                        draft_text,
+                        model_task=config.general.model_task,
                     )
-                    action_dict["content"] = [draft_text]
+                    # 提取失败时回退到原始草稿（此处已有有效草稿，不跳过发送）
+                    backfill_text = extracted if extracted else draft_text
+                    logger.info(
+                        f"[NFC] nfc_reply content 为空，回填感知阶段草稿"
+                        f"{'(经 sub actor 提取)' if extracted else '(原始)'}: "
+                        f"{backfill_text[:80]}{'...' if len(backfill_text) > 80 else ''}"
+                    )
+                    action_dict["content"] = [backfill_text]
                     # 同步更新 call.args 以确保实际执行时也使用回填内容
                     call = ToolCall(
                         id=call.id,
                         name=call.name,
-                        args={**call.args, "content": [draft_text]},
+                        args={**call.args, "content": [backfill_text]},
                     )
                     standardized_calls[-1] = call
 

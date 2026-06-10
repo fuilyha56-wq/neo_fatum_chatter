@@ -44,3 +44,6 @@ htmlcov/
 # MoFox-Bot specific
 config/local_*.toml
 *.log
+
+# Claude Code
+.claude/
