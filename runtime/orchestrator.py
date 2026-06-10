@@ -30,6 +30,7 @@ from ..services import (
     ProactiveService,
     TimeoutService,
 )
+from ..services.perception_extractor import extract_reply_from_perception
 from .turn_controller import commit_turn_decision, prepare_turn_input
 
 if TYPE_CHECKING:
@@ -333,53 +334,66 @@ async def execute_orchestrator(
         elif getattr(response, "message", ""):
             logger.debug("[NFC] 本轮无 tool call，等待标准化器判定是否需要重试")
 
-        # ── 兜底：感知阶段耗尽重试仍无工具调用时，将纯文本作为回复发出 ──
+        # ── 兜底：感知阶段耗尽重试仍无工具调用时，用 sub actor 提取回复 ──
         if not call_list:
             fallback_text = (getattr(response, "message", "") or "").strip()
             if fallback_text:
                 logger.warning(
-                    f"[NFC] 感知阶段耗尽重试仍无工具调用，将纯文本作为兜底回复发出: "
+                    f"[NFC] 感知阶段耗尽重试仍无工具调用，交由 sub actor 提取回复: "
                     f"{fallback_text[:80]}{'...' if len(fallback_text) > 80 else ''}"
                 )
-                trigger_msg = unread_msgs[-1] if unread_msgs else None
-                if trigger_msg is None:
-                    trigger_msg = await self._get_virtual_trigger_message()
-                sent = await self._execute_reply(
-                    fallback_text, config, trigger_msg, ""
+                extracted = await extract_reply_from_perception(
+                    fallback_text,
+                    model_task=config.general.model_task,
                 )
-                if sent:
-                    # 构造等效的 decision 以正确更新 session
-                    from ..domain.decision import Decision
-                    decision = Decision(
-                        thought="(兜底：模型未输出工具调用，纯文本直接发送)",
-                        visible_reply_segments=[fallback_text],
-                        has_reply_action=True,
-                        has_meaningful_action=True,
-                        actions=[{"type": "nfc_reply", "content": [fallback_text]}],
+                if not extracted:
+                    logger.debug("[NFC] sub actor 未提取到有效内容，跳过发送")
+                else:
+                    reply_text = extracted
+                    logger.info(
+                        f"[NFC] sub actor 提取结果: "
+                        f"{reply_text[:80]}{'...' if len(reply_text) > 80 else ''}"
                     )
-                    turn_control = await commit_turn_decision(
-                        self,
-                        decision,
-                        response,
-                        session,
-                        config,
-                        prompt_builder,
-                        chat_stream,
-                        pre_send_user_text,
-                        last_user_ts,
-                        chain_user_pre_saved,
-                        is_final_timeout,
+
+                    trigger_msg = unread_msgs[-1] if unread_msgs else None
+                    if trigger_msg is None:
+                        trigger_msg = await self._get_virtual_trigger_message()
+                    sent = await self._execute_reply(
+                        reply_text, config, trigger_msg, ""
                     )
-                    is_final_timeout = turn_control.is_final_timeout
-                    if turn_control.has_pending_tool_results:
-                        has_pending_tool_results = True
-                    if turn_control.next_signal is not None:
-                        yield turn_control.next_signal
-                    if turn_control.return_after_yield:
+                    if sent:
+                        # 构造等效的 decision 以正确更新 session
+                        from ..domain.decision import Decision
+                        decision = Decision(
+                            thought="(兜底：模型未输出工具调用，纯文本直接发送)",
+                            visible_reply_segments=[reply_text],
+                            has_reply_action=True,
+                            has_meaningful_action=True,
+                            actions=[{"type": "nfc_reply", "content": [reply_text]}],
+                        )
+                        turn_control = await commit_turn_decision(
+                            self,
+                            decision,
+                            response,
+                            session,
+                            config,
+                            prompt_builder,
+                            chat_stream,
+                            pre_send_user_text,
+                            last_user_ts,
+                            chain_user_pre_saved,
+                            is_final_timeout,
+                        )
+                        is_final_timeout = turn_control.is_final_timeout
+                        if turn_control.has_pending_tool_results:
+                            has_pending_tool_results = True
+                        if turn_control.next_signal is not None:
+                            yield turn_control.next_signal
+                        if turn_control.return_after_yield:
+                            return
+                        if turn_control.continue_loop:
+                            continue
                         return
-                    if turn_control.continue_loop:
-                        continue
-                    return
 
         trigger_msg = unread_msgs[-1] if unread_msgs else None
         if trigger_msg is None:

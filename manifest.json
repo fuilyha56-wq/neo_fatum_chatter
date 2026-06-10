@@ -1,6 +1,6 @@
 {
     "name": "neo_fatum_chatter",
-    "version": "2.3.1",
+    "version": "2.3.2",
     "description": "Neo Fatum Chatter 对话引擎 — 基于心理活动流的私聊特化聊天器",
     "author": "Lycoris",
     "dependencies": {
