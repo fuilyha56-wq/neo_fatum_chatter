@@ -327,7 +327,7 @@ async def parse_tool_calls(
                     # 使用 sub actor 从感知草稿中提取可发送内容
                     extracted = await extract_reply_from_perception(
                         draft_text,
-                        model_task=config.general.model_task,
+                        model_task=config.general.perception_extract_task,
                     )
                     # 提取失败时回退到原始草稿（此处已有有效草稿，不跳过发送）
                     backfill_text = extracted if extracted else draft_text

@@ -69,6 +69,15 @@ class NFCConfig(BaseConfig):
                 "0 表示不重试。"
             ),
         )
+        perception_extract_task: str = Field(
+            default="sub_actor",
+            description=(
+                "感知阶段兜底回填时，用于提取回复内容的模型任务名称。"
+                "设为 'sub_actor' 使用轻量模型（默认，省开销），"
+                "设为 'actor' 使用主对话模型（更懂上下文风格）。"
+                "对应 model.toml 中的 task 名称。"
+            ),
+        )
         max_consecutive_llm_failures: int = Field(
             default=15,
             description=(

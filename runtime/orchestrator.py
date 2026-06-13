@@ -344,7 +344,7 @@ async def execute_orchestrator(
                 )
                 extracted = await extract_reply_from_perception(
                     fallback_text,
-                    model_task=config.general.model_task,
+                    model_task=config.general.perception_extract_task,
                 )
                 if not extracted:
                     logger.debug("[NFC] sub actor 未提取到有效内容，跳过发送")
