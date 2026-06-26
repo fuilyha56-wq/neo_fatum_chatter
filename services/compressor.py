@@ -179,18 +179,25 @@ async def compress_history(
         return
 
     # ── 5. 更新 session（直接替换）──
+    # 入参 session 是调用方持有的同一对象，异步压缩可能晚于主循环下一轮，
+    # 因此在锁内重新 get latest 合并 summary，避免覆盖主循环期间对其他字段的修改。
+    # 同时把 summary 三个字段同步回入参 session，让当前 execute 循环内的
+    # _hot_update_summary 能立即读到新值。
+    now_ts = time.time()
     session.history_summary = summary
-    session.last_compress_at = time.time()
+    session.last_compress_at = now_ts
     session.compress_round_count = 0
     if session_store is not None:
         async with session_store.lock(stream_id):
             latest_session = await session_store.get(stream_id)
-            if latest_session is not None:
+            if latest_session is None:
+                # session 被并发删除，回退保存入参
+                await session_store.save(session)
+            else:
                 latest_session.history_summary = summary
-                latest_session.last_compress_at = session.last_compress_at
+                latest_session.last_compress_at = now_ts
                 latest_session.compress_round_count = 0
-                session = latest_session
-            await session_store.save(session)
+                await session_store.save(latest_session)
     logger.info(
         f"[NFC] 近期记忆压缩完成：流 {stream_id}，"
         f"覆盖 {len(formatted_lines)} 条消息，"

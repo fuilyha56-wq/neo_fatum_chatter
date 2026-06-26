@@ -8,27 +8,14 @@ from typing import TYPE_CHECKING, Any
 from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.concurrency import get_task_manager
 
+from .unread_policy import filter_interrupt_messages
+
 if TYPE_CHECKING:
     from ..chatter import NeoFatumChatter
     from ..config import NFCConfig
 
 
 logger = get_logger("NFC_chatter")
-
-
-def filter_interrupt_messages(
-    messages: list[Any],
-    known_unread_ids: frozenset[str],
-) -> list[Any]:
-    """筛选可用于打断当前 LLM 请求的新消息。"""
-    interrupt_msgs: list[Any] = []
-    for message in messages:
-        message_id = getattr(message, "message_id", None)
-        if not message_id:
-            continue
-        if str(message_id) not in known_unread_ids:
-            interrupt_msgs.append(message)
-    return interrupt_msgs
 
 
 async def _cancel_and_await_task(task: asyncio.Task[Any]) -> None:

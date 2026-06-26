@@ -119,7 +119,9 @@ class ProactiveHandler(BaseEventHandler):
         try:
             from ..plugin import NFCPlugin
             if isinstance(self.plugin, NFCPlugin):
-                session = await self.plugin._session_store.get(stream_id)  # type: ignore[attr-defined]
+                # 只读访问，用 peek 避免 get 把该 session 加入内存缓存，
+                # 否则它会被 ProactiveThinker.check_all_sessions 误判为活跃 session。
+                session = await self.plugin._session_store.peek(stream_id)  # type: ignore[attr-defined]
                 if session:
                     if session.user_id:
                         target_user_id = session.user_id
@@ -147,17 +149,11 @@ class ProactiveHandler(BaseEventHandler):
         proactive_content = "[主动发起] 你已经沉默很久了，主动找对方聊聊吧。"
         try:
             from ..prompts.modules import build_proactive_context
-            from ..config import NFCConfig
-
-            use_tool_calling = True
-            if isinstance(self.plugin.config, NFCConfig):
-                use_tool_calling = self.plugin.config.general.use_tool_calling
 
             proactive_content = await build_proactive_context(
                 silence_minutes=silence_minutes,
                 recent_activity=recent_activity,
                 scheduled_reason=scheduled_reason,
-                use_tool_calling=use_tool_calling,
             )
         except Exception as e:
             logger.debug(f"构建主动发起上下文失败，使用默认消息: {e}")

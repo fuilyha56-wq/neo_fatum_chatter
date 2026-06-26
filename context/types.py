@@ -50,6 +50,7 @@ class ContextPlan:
 
     user_text: str
     contributions: list[ContextContribution] = field(default_factory=list)
+    session_contributions: list[ContextContribution] = field(default_factory=list)
 
 
 @dataclass(slots=True)

@@ -2,11 +2,14 @@
 
 允许 LLM 预约下一次主动思考的时间。
 预约存在时，条件主动发起逻辑暂停，直到预约时间到达。
+
+注意：本 action 是工具调用薄壳，仅负责向 LLM 返回执行结果字符串。
+真正的预约写入由 ``runtime/orchestrator`` 通过 ``ProactiveService.apply_schedule``
+统一应用，避免 action 与 orchestrator 双轨制造成状态不一致。
 """
 
 from __future__ import annotations
 
-import time
 from typing import Annotated, ClassVar
 
 from src.app.plugin_system.api.log_api import get_logger
@@ -73,6 +76,9 @@ class ScheduleProactiveAction(BaseAction):
 
         Returns:
             (True, 状态描述)
+
+        注意：本方法不写入 session，仅返回状态字符串供 LLM 感知。
+        预约的实际写入由 ``ProactiveService.apply_schedule`` 在决策提交阶段统一完成。
         """
         if _extra:
             logger.debug(f"忽略 schedule_proactive 未知参数: {sorted(_extra.keys())}")
@@ -81,13 +87,8 @@ class ScheduleProactiveAction(BaseAction):
             return True, "已取消当前主动思考预约"
 
         delay_minutes = max(self._MIN_DELAY_MIN, min(self._MAX_DELAY_MIN, delay_minutes))
-        delay_seconds = delay_minutes * 60
-        at = time.time() + delay_seconds
-        from datetime import datetime
-
-        dt_str = datetime.fromtimestamp(at).strftime("%H:%M:%S")
-        if reason:
-            logger.debug(f"预约主动思考: {dt_str}（{reason}）")
-        else:
-            logger.debug(f"预约主动思考: {dt_str}")
+        logger.debug(
+            f"预约主动思考: {delay_minutes} 分钟后"
+            + (f"（{reason}）" if reason else "")
+        )
         return True, f"已预约在 {delay_minutes} 分钟后主动思考"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from src.app.plugin_system.api.llm_api import (
@@ -30,8 +31,14 @@ from ..services import (
     ProactiveService,
     TimeoutService,
 )
+from ..services.context_sanitizer import heal_orphan_tool_results
 from ..services.perception_extractor import extract_reply_from_perception
-from .turn_controller import commit_turn_decision, prepare_turn_input
+from .request_view import build_request_view, strip_transient_payloads
+from .turn_controller import (
+    commit_turn_decision,
+    filter_messages_already_in_payloads,
+    prepare_turn_input,
+)
 
 if TYPE_CHECKING:
     from ..chatter import NeoFatumChatter
@@ -39,36 +46,164 @@ if TYPE_CHECKING:
 
 logger = get_logger("NFC_chatter")
 
-
-def _clone_payload(payload: LLMPayload) -> LLMPayload:
-    """复制 payload 外壳，避免临时追加时改写快照对象。"""
-    return LLMPayload(payload.role, list(payload.content))
-
-
-def append_temporary_payload(response: Any, payload: LLMPayload) -> list[LLMPayload]:
-    """临时追加 payload，并返回追加前快照。"""
-    snapshot = [_clone_payload(item) for item in getattr(response, "payloads", []) or []]
-    response.payloads = [_clone_payload(item) for item in snapshot]
-    response.add_payload(payload)
-    return snapshot
+# 热替换摘要的 marker 前缀
+_SUMMARY_MARKER_PREFIX = "【你对"
+_SUMMARY_MARKER_SUFFIX = "的近期记忆】"
 
 
-def restore_temporary_payload(response: Any, snapshot: list[LLMPayload]) -> None:
-    """移除临时 payload，保留发送后追加的响应 payload。"""
+def _hot_update_summary(response: Any, session: Any) -> None:
+    """当异步压缩完成后，热替换 response chain 中的 summary 部分。
+
+    定位动态 USER payload 中以「【你对...的近期记忆】」开头的段落，
+    如果 session.history_summary 已更新则原地替换，使当前对话立即受益。
+    """
+    new_summary = getattr(session, "history_summary", "") or ""
+    if not new_summary.strip():
+        return
+
     payloads = getattr(response, "payloads", None)
-    if not isinstance(payloads, list):
-        response.payloads = snapshot
+    if not payloads:
         return
 
-    if payloads[:len(snapshot)] == snapshot:
-        restored_tail = payloads[len(snapshot):]
-        if restored_tail:
-            response.payloads = snapshot + restored_tail[1:]
-        else:
-            response.payloads = snapshot
-        return
+    for payload in payloads:
+        if payload.role != ROLE.USER:
+            continue
+        content_items = payload.content if isinstance(payload.content, list) else [payload.content]
+        for i, item in enumerate(content_items):
+            text = getattr(item, "text", "")
+            if not isinstance(text, str):
+                continue
+            marker_idx = text.find(_SUMMARY_MARKER_PREFIX)
+            if marker_idx < 0:
+                continue
 
-    response.payloads = snapshot + payloads[len(snapshot):]
+            # 找到 marker 所在行末尾（包含 "的近期记忆】"）
+            line_end = text.find("\n", marker_idx)
+            if line_end < 0:
+                # marker 是最后一行，后面全是 summary
+                old_block_end = len(text)
+            else:
+                # 找下一个分隔符 "---" 或下一个 marker
+                next_sep = text.find("\n\n---\n\n", line_end)
+                old_block_end = next_sep if next_sep > 0 else len(text)
+
+            # 提取 user_name 用于重建 marker
+            suffix_pos = text.find(_SUMMARY_MARKER_SUFFIX, marker_idx)
+            if suffix_pos > marker_idx:
+                user_name = text[marker_idx + len(_SUMMARY_MARKER_PREFIX):suffix_pos]
+            else:
+                user_name = "对方"
+
+            new_block = f"{_SUMMARY_MARKER_PREFIX}{user_name}{_SUMMARY_MARKER_SUFFIX}\n{new_summary.strip()}"
+            new_text = text[:marker_idx] + new_block + text[old_block_end:]
+
+            if isinstance(payload.content, list):
+                payload.content[i] = Text(new_text)
+            else:
+                payload.content = Text(new_text)
+            return  # 只替换第一个匹配
+
+
+@dataclass(slots=True)
+class _LoopState:
+    """主循环跨迭代可变状态。"""
+
+    pre_send_user_text: str = ""
+    last_user_ts: float = 0.0
+    chain_user_pre_saved: bool = False
+    extra_payload: LLMPayload | None = None
+    consecutive_llm_failures: int = 0
+    has_pending_tool_results: bool = False
+    is_final_timeout: bool = False
+    history_images_injected: bool = False
+
+
+class _LLMErrorOutcome:
+    """LLM 错误处理结果。"""
+    __slots__ = ("should_break", "should_continue", "failure", "retry_delay")
+
+    def __init__(
+        self,
+        *,
+        should_break: bool = False,
+        should_continue: bool = False,
+        failure: Failure | None = None,
+        retry_delay: float = 0.0,
+    ) -> None:
+        self.should_break = should_break
+        self.should_continue = should_continue
+        self.failure = failure
+        self.retry_delay = retry_delay
+
+
+def _handle_llm_error(
+    exc: Exception,
+    *,
+    config: NFCConfig,
+    consecutive_llm_failures: int,
+) -> _LLMErrorOutcome:
+    """处理 LLM 请求异常，返回控制指令。"""
+    if isinstance(exc, LLMAuthenticationError):
+        logger.error(
+            f"LLM 认证失败，请检查 API Key 配置 (model={exc.model}): {exc}",
+            exc_info=True,
+        )
+        return _LLMErrorOutcome(
+            should_break=True,
+            failure=Failure("LLM 认证失败", exc),
+        )
+
+    if isinstance(exc, LLMRateLimitError):
+        logger.warning(
+            f"LLM 触发速率限制，建议等待 {exc.retry_after or '未知'} 秒后重试"
+            f" (model={exc.model}): {exc}",
+            exc_info=True,
+        )
+        retry_after = getattr(exc, "retry_after", None)
+        delay = float(retry_after) if isinstance(retry_after, (int, float)) else 1.0
+        return _LLMErrorOutcome(
+            should_continue=True,
+            retry_delay=max(0.1, min(delay, 30.0)),
+        )
+
+    if isinstance(exc, LLMTimeoutError):
+        logger.warning(
+            f"LLM 请求超时 (timeout={exc.timeout}s, model={exc.model}): {exc}",
+            exc_info=True,
+        )
+        return _LLMErrorOutcome(should_continue=True)
+
+    if isinstance(exc, LLMTokenLimitError):
+        logger.error(
+            f"LLM Token 超限 (max={exc.max_tokens}, requested={exc.requested_tokens},"
+            f" model={exc.model}): {exc}",
+            exc_info=True,
+        )
+        return _LLMErrorOutcome(
+            should_break=True,
+            failure=Failure("LLM Token 超限", exc),
+        )
+
+    if isinstance(exc, LLMAPIError):
+        logger.error(
+            f"LLM API 错误 (status={exc.status_code}, code={exc.error_code},"
+            f" model={exc.model}): {exc}",
+            exc_info=True,
+        )
+        # 不 break，可重试
+        return _LLMErrorOutcome(should_continue=True)
+
+    # LLMError 或其他已知 LLM 异常
+    if isinstance(exc, LLMError):
+        logger.error(f"LLM 请求失败: {exc}", exc_info=True)
+        return _LLMErrorOutcome(should_continue=True)
+
+    # 未知异常
+    logger.error(f"LLM 请求失败（未知错误）: {repr(exc)}", exc_info=True)
+    return _LLMErrorOutcome(
+        should_break=True,
+        failure=Failure("LLM 请求失败", exc),
+    )
 
 
 async def execute_orchestrator(
@@ -77,25 +212,23 @@ async def execute_orchestrator(
     """执行 NFC 对话主循环。"""
     from src.app.plugin_system.api.stream_api import activate_stream
 
-    self = chatter
-
-    chat_stream = await activate_stream(self.stream_id)
+    chat_stream = await activate_stream(chatter.stream_id)
     if chat_stream is None:
-        logger.error(f"无法激活聊天流: {self.stream_id}")
+        logger.error(f"无法激活聊天流: {chatter.stream_id}")
         yield Failure("聊天流激活失败")
         return
-    config = self._get_config()
+    config = chatter._get_config()
 
     if not config.general.enabled:
         logger.debug("NFC 插件已禁用，跳过 execute")
         yield Stop(0)
         return
 
-    session = await self._get_session()
+    session = await chatter._get_session()
     timeout_service = TimeoutService(config)
 
     if config.general.native_multimodal:
-        self._register_vlm_skip()
+        chatter._register_vlm_skip()
 
     model_set = None
     temperature = config.general.temperature
@@ -136,25 +269,20 @@ async def execute_orchestrator(
         usable_map,
         prompt_builder,
         has_history,
-    ) = await self._build_initial_context(
+    ) = await chatter._build_initial_context(
         chat_stream,
         config,
         session,
         model_set,
     )
 
-    history_images_injected = False
-    has_pending_tool_results = False
-    is_final_timeout = False
-    pre_send_user_text = ""
-    last_user_ts = 0.0
-    chain_user_pre_saved = False
-    extra_payload: LLMPayload | None = None
-    consecutive_llm_failures = 0
+    loop_state = _LoopState()
 
     while True:
+        heal_orphan_tool_results(response, where="loop-top")
+        _hot_update_summary(response, session)
         turn_input = await prepare_turn_input(
-            self,
+            chatter,
             response,
             chat_stream,
             config,
@@ -163,15 +291,15 @@ async def execute_orchestrator(
             timeout_service,
             image_budget,
             has_history,
-            history_images_injected,
-            has_pending_tool_results,
+            loop_state.history_images_injected,
+            loop_state.has_pending_tool_results,
         )
         response = turn_input.response
         unread_msgs = turn_input.unread_msgs
-        extra_payload = turn_input.extra_payload
-        history_images_injected = turn_input.history_images_injected
-        has_pending_tool_results = turn_input.has_pending_tool_results
-        is_final_timeout = turn_input.is_final_timeout
+        loop_state.extra_payload = turn_input.extra_payload
+        loop_state.history_images_injected = turn_input.history_images_injected
+        loop_state.has_pending_tool_results = turn_input.has_pending_tool_results
+        loop_state.is_final_timeout = turn_input.is_final_timeout
         is_timeout_turn = turn_input.is_timeout_turn
 
         if turn_input.next_signal is not None:
@@ -180,8 +308,8 @@ async def execute_orchestrator(
             continue
 
         if unread_msgs:
-            last_user_ts = min(
-                (self._extract_timestamp(message) for message in unread_msgs),
+            loop_state.last_user_ts = max(
+                (chatter._extract_timestamp(message) for message in unread_msgs),
                 default=time.time(),
             )
 
@@ -197,23 +325,24 @@ async def execute_orchestrator(
                         if isinstance(chunk, Text)
                     )
                     break
-            if new_user_text != pre_send_user_text:
-                pre_send_user_text = new_user_text
-                chain_user_pre_saved = False
+            if new_user_text != loop_state.pre_send_user_text:
+                loop_state.pre_send_user_text = new_user_text
+                loop_state.chain_user_pre_saved = False
 
-        if pre_send_user_text and not chain_user_pre_saved and not is_timeout_turn:
+        if loop_state.pre_send_user_text and not loop_state.chain_user_pre_saved and not is_timeout_turn:
             session.update_chain(
-                [{"role": "user", "text": pre_send_user_text, "ts": last_user_ts}],
+                [{"role": "user", "text": loop_state.pre_send_user_text, "ts": loop_state.last_user_ts}],
                 config.prompt.max_context_payloads,
             )
-            await self._save_session(session)
-            chain_user_pre_saved = True
+            await chatter._save_session(session)
+            loop_state.chain_user_pre_saved = True
 
-        temporary_payload_snapshot: list[LLMPayload] | None = None
-        if extra_payload is not None:
-            temporary_payload_snapshot = append_temporary_payload(response, extra_payload)
+        transient_payloads: list[LLMPayload] = []
+        if loop_state.extra_payload is not None:
+            transient_payloads.append(loop_state.extra_payload)
+        send_target = build_request_view(response, transient_payloads)
         if config.debug.show_prompt:
-            self._log_prompt(response)
+            chatter._log_prompt(send_target)
 
         if unread_msgs:
             known_ids: frozenset[str] = frozenset(
@@ -222,7 +351,7 @@ async def execute_orchestrator(
                 if (message_id := getattr(message, "message_id", None)) is not None
             )
         else:
-            _, current_snapshot = await self.fetch_unreads(
+            _, current_snapshot = await chatter.fetch_unreads(
                 time_format="%Y-%m-%d %H:%M:%S"
             )
             known_ids = frozenset(
@@ -232,101 +361,82 @@ async def execute_orchestrator(
             )
 
         try:
-            if config.buffer.interrupt_enabled:
-                new_response, interrupt_msgs = await self._send_interruptable(
+            if config.buffer.interrupt_enabled and not transient_payloads:
+                new_response, interrupt_msgs = await chatter._send_interruptable(
                     response,
                     config,
                     known_ids,
                 )
                 if interrupt_msgs:
-                    if temporary_payload_snapshot is not None:
-                        restore_temporary_payload(response, temporary_payload_snapshot)
-                    extra_payload = None
-                    await self.flush_unreads(unread_msgs or [])
+                    loop_state.extra_payload = None
+                    await chatter.flush_unreads(unread_msgs or [])
                     session.add_interrupt_event(interrupt_msgs)
-                    await self._save_session(session)
+                    await chatter._save_session(session)
                     continue
-                assert new_response is not None
+                if new_response is None:
+                    logger.warning("[打断] LLM 被取消但无新消息，重新发起请求")
+                    continue
                 response = new_response
             else:
-                response = await self._send_with_perceive_loop(
-                    response,
-                    config.general.max_compat_retries,
-                )
-            await self.flush_unreads(unread_msgs if unread_msgs else [])
+                if transient_payloads:
+                    response = await send_target.send(
+                        auto_append_response=True,
+                        stream=False,
+                    )
+                    response = strip_transient_payloads(send_target, response)
+                else:
+                    response = await chatter._send_with_perceive_loop(
+                        response,
+                        config.general.max_compat_retries,
+                    )
+            await chatter.flush_unreads(unread_msgs if unread_msgs else [])
         except (LLMAuthenticationError, LLMRateLimitError, LLMTimeoutError,
                 LLMTokenLimitError, LLMAPIError, LLMError) as exc:
-            # 按子类输出差异化日志
-            if isinstance(exc, LLMAuthenticationError):
-                logger.error(
-                    f"LLM 认证失败，请检查 API Key 配置 (model={exc.model}): {exc}",
-                    exc_info=True,
-                )
-                await self._save_session(session)
-                yield Failure("LLM 认证失败", exc)
-                break
-            elif isinstance(exc, LLMRateLimitError):
-                logger.warning(
-                    f"LLM 触发速率限制，建议等待 {exc.retry_after or '未知'} 秒后重试"
-                    f" (model={exc.model}): {exc}",
-                    exc_info=True,
-                )
-                retry_after = getattr(exc, "retry_after", None)
-                delay = float(retry_after) if isinstance(retry_after, (int, float)) else 1.0
-                await asyncio.sleep(max(0.1, min(delay, 30.0)))
-            elif isinstance(exc, LLMTimeoutError):
-                logger.warning(
-                    f"LLM 请求超时 (timeout={exc.timeout}s, model={exc.model}): {exc}",
-                    exc_info=True,
-                )
-                await asyncio.sleep(min(2.0 ** min(consecutive_llm_failures, 4), 30.0))
-            elif isinstance(exc, LLMTokenLimitError):
-                logger.error(
-                    f"LLM Token 超限 (max={exc.max_tokens}, requested={exc.requested_tokens},"
-                    f" model={exc.model}): {exc}",
-                    exc_info=True,
-                )
-                await self._save_session(session)
-                yield Failure("LLM Token 超限", exc)
-                break
-            elif isinstance(exc, LLMAPIError):
-                logger.error(
-                    f"LLM API 错误 (status={exc.status_code}, code={exc.error_code},"
-                    f" model={exc.model}): {exc}",
-                    exc_info=True,
-                )
-            else:
-                logger.error(f"LLM 请求失败: {exc}", exc_info=True)
+            outcome = _handle_llm_error(
+                exc,
+                config=config,
+                consecutive_llm_failures=loop_state.consecutive_llm_failures,
+            )
+            loop_state.extra_payload = None
+            loop_state.consecutive_llm_failures += 1
 
-            # 统一清理与失败计数
-            if temporary_payload_snapshot is not None:
-                restore_temporary_payload(response, temporary_payload_snapshot)
-            extra_payload = None
-            consecutive_llm_failures += 1
+            # 可重试类错误：指数退避后 continue
+            if outcome.should_continue:
+                if outcome.retry_delay > 0:
+                    await asyncio.sleep(outcome.retry_delay)
+                elif isinstance(exc, LLMTimeoutError):
+                    await asyncio.sleep(
+                        min(2.0 ** min(loop_state.consecutive_llm_failures, 4), 30.0)
+                    )
+
+            # 不可重试类错误：保存 session 并 yield Failure
+            if outcome.should_break:
+                await chatter._save_session(session)
+                if outcome.failure:
+                    yield outcome.failure
+                break
+
+            # 连续失败上限检查
             _fail_limit = config.general.max_consecutive_llm_failures
-            if _fail_limit > 0 and consecutive_llm_failures >= _fail_limit:
+            if _fail_limit > 0 and loop_state.consecutive_llm_failures >= _fail_limit:
                 logger.error(
-                    f"连续 LLM 失败已达上限 ({consecutive_llm_failures}/{_fail_limit})，终止会话循环"
+                    f"连续 LLM 失败已达上限 ({loop_state.consecutive_llm_failures}/{_fail_limit})，终止会话循环"
                 )
-                await self._save_session(session)
+                await chatter._save_session(session)
                 yield Failure("LLM 连续失败次数超限", exc)
                 break
             continue
         except Exception as exc:
             logger.error(f"LLM 请求失败（未知错误）: {repr(exc)}", exc_info=True)
-            if temporary_payload_snapshot is not None:
-                restore_temporary_payload(response, temporary_payload_snapshot)
-            extra_payload = None
-            await self._save_session(session)
+            loop_state.extra_payload = None
+            await chatter._save_session(session)
             yield Failure("LLM 请求失败", exc)
             break
 
         # LLM 请求成功，重置连续失败计数
-        consecutive_llm_failures = 0
-
-        if temporary_payload_snapshot is not None:
-            restore_temporary_payload(response, temporary_payload_snapshot)
-        extra_payload = None
+        loop_state.consecutive_llm_failures = 0
+        heal_orphan_tool_results(response, where="post-send")
+        loop_state.extra_payload = None
 
         call_list = coerce_call_list(response)
         if call_list:
@@ -357,8 +467,8 @@ async def execute_orchestrator(
 
                     trigger_msg = unread_msgs[-1] if unread_msgs else None
                     if trigger_msg is None:
-                        trigger_msg = await self._get_virtual_trigger_message()
-                    sent = await self._execute_reply(
+                        trigger_msg = await chatter._get_virtual_trigger_message()
+                    sent = await chatter._execute_reply(
                         reply_text, config, trigger_msg, ""
                     )
                     if sent:
@@ -372,21 +482,21 @@ async def execute_orchestrator(
                             actions=[{"type": "nfc_reply", "content": [reply_text]}],
                         )
                         turn_control = await commit_turn_decision(
-                            self,
+                            chatter,
                             decision,
                             response,
                             session,
                             config,
                             prompt_builder,
                             chat_stream,
-                            pre_send_user_text,
-                            last_user_ts,
-                            chain_user_pre_saved,
-                            is_final_timeout,
+                            loop_state.pre_send_user_text,
+                            loop_state.last_user_ts,
+                            loop_state.chain_user_pre_saved,
+                            loop_state.is_final_timeout,
                         )
-                        is_final_timeout = turn_control.is_final_timeout
+                        loop_state.is_final_timeout = turn_control.is_final_timeout
                         if turn_control.has_pending_tool_results:
-                            has_pending_tool_results = True
+                            loop_state.has_pending_tool_results = True
                         if turn_control.next_signal is not None:
                             yield turn_control.next_signal
                         if turn_control.return_after_yield:
@@ -397,14 +507,13 @@ async def execute_orchestrator(
 
         trigger_msg = unread_msgs[-1] if unread_msgs else None
         if trigger_msg is None:
-            trigger_msg = await self._get_virtual_trigger_message()
+            trigger_msg = await chatter._get_virtual_trigger_message()
         decision = await parse_response_decision(
             response,
             usable_map,
             trigger_msg,
             config,
-            execute_reply_fn=self._execute_reply,
-            run_tool_call_fn=self.run_tool_call,
+            run_tool_call_fn=chatter.run_tool_call,
             pre_execute_hook=lambda result: log_nfc_result(result, config),
         )
 
@@ -434,22 +543,41 @@ async def execute_orchestrator(
                 logger.warning(f"[NFC] schedule_proactive 参数解析失败: {exc}")
 
         turn_control = await commit_turn_decision(
-            self,
+            chatter,
             decision,
             response,
             session,
             config,
             prompt_builder,
             chat_stream,
-            pre_send_user_text,
-            last_user_ts,
-            chain_user_pre_saved,
-            is_final_timeout,
+            loop_state.pre_send_user_text,
+            loop_state.last_user_ts,
+            loop_state.chain_user_pre_saved,
+            loop_state.is_final_timeout,
         )
-        is_final_timeout = turn_control.is_final_timeout
+        loop_state.is_final_timeout = turn_control.is_final_timeout
 
         if turn_control.has_pending_tool_results:
-            has_pending_tool_results = True
+            loop_state.has_pending_tool_results = True
+
+        # yield Wait/Stop 前补探一次未读。
+        # 框架的 _wait_state_check 以 yield 瞬间的未读计数为基线，仅当
+        # 之后计数继续增长才唤醒。若有消息恰好在本轮处理末尾、yield 之前
+        # 到达，它会被算进基线却从未被处理，导致该消息被"困住"——必须再
+        # 发一条新消息把计数推高才会触发。这里在让出前直接探测：若发现尚
+        # 未进入 payload 的新消息，就不让出，直接续轮交由 prepare_turn_input
+        # 当作 NEW_MESSAGES 处理。
+        if turn_control.next_signal is not None:
+            _, pending_msgs = await chatter.fetch_unreads(
+                time_format="%Y-%m-%d %H:%M:%S"
+            )
+            pending_msgs = filter_messages_already_in_payloads(response, pending_msgs)
+            if pending_msgs:
+                logger.info(
+                    f"[补探] yield 前检测到 {len(pending_msgs)} 条未处理新消息，"
+                    "跳过让出直接续轮"
+                )
+                continue
 
         if turn_control.next_signal is not None:
             yield turn_control.next_signal

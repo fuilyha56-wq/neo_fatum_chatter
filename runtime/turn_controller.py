@@ -10,6 +10,7 @@ from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.base import Stop, Wait
 from src.kernel.llm import LLMPayload, ROLE, Text
 
+from ..domain.turn_trigger import TurnTrigger, classify_turn_trigger
 from ..models import WaitingConfig
 from ..services import SummaryService
 from ..services.context_sanitizer import close_pending_tool_chain, prepare_payload_chain_for_send
@@ -87,7 +88,40 @@ async def prepare_turn_input(
     is_final_timeout = False
     is_timeout_turn = False
 
-    if formatted_text and unread_msgs:
+    # 使用显式枚举分类触发类型
+    trigger = classify_turn_trigger(
+        has_unread=bool(formatted_text and unread_msgs),
+        has_pending_tool_results=has_pending_tool_results,
+        session=session,
+        is_timeout=timeout_service.check_timeout(session) if session.is_waiting() else False,
+    )
+
+    if trigger == TurnTrigger.NEW_MESSAGES:
+        # 等待期间抑制提前唤醒：收到新消息但 session 仍在 waiting 且未超时时，
+        # 不立即处理，返回 Wait(remaining) 让消息累积到超时后统一处理。
+        if (
+            config.wait.suppress_early_wake
+            and session.is_waiting()
+            and not session.waiting_config.is_timeout()
+        ):
+            remaining = max(
+                0.0,
+                session.waiting_config.max_wait_seconds
+                - session.waiting_config.get_elapsed_seconds(),
+            )
+            logger.debug(
+                f"[等待抑制] 有新消息但仍在等待中，剩余 {remaining:.1f}s，不处理"
+            )
+            return TurnInputResult(
+                response=response,
+                unread_msgs=[],
+                next_signal=Wait(remaining) if remaining > 0 else None,
+                continue_loop=True if remaining > 0 else False,
+                history_images_injected=history_images_injected,
+                has_pending_tool_results=has_pending_tool_results,
+                is_final_timeout=is_final_timeout,
+            )
+
         formatted_text, unread_msgs = await chatter._accumulate_messages(config)
         unread_msgs = filter_messages_already_in_payloads(response, dedupe_messages_by_id(unread_msgs))
         if not unread_msgs:
@@ -171,32 +205,32 @@ async def prepare_turn_input(
                 logger.debug("[NFC] Upsert USER payload（打断重来合并新消息）")
         if not upserted:
             response.add_payload(user_payload)
-    elif has_pending_tool_results:
+    elif trigger == TurnTrigger.FOLLOWUP_TOOL_RESULT:
         has_pending_tool_results = False
-    elif session.is_waiting():
-        if timeout_service.check_timeout(session):
-            timeout_result = timeout_service.build_timeout_result(
-                response,
-                session,
+    elif trigger == TurnTrigger.TIMEOUT_EXPIRED:
+        timeout_result = timeout_service.build_timeout_result(
+            response,
+            session,
+        )
+        is_final_timeout = timeout_result.is_final_timeout
+        is_timeout_turn = True
+        timeout_upserted = False
+        if response.payloads and response.payloads[-1].role == ROLE.USER:
+            last_payload = response.payloads[-1]
+            timeout_text = (
+                timeout_result.payload.content.text  # type: ignore[attr-defined]
+                if isinstance(timeout_result.payload.content, Text)
+                else ""
             )
-            is_final_timeout = timeout_result.is_final_timeout
-            is_timeout_turn = True
-            timeout_upserted = False
-            if response.payloads and response.payloads[-1].role == ROLE.USER:
-                last_payload = response.payloads[-1]
-                timeout_text = (
-                    timeout_result.payload.content.text  # type: ignore[attr-defined]
-                    if isinstance(timeout_result.payload.content, Text)
-                    else ""
+            if timeout_text and last_payload.content and isinstance(last_payload.content[-1], Text):
+                last_payload.content[-1] = Text(
+                    f"{last_payload.content[-1].text}\n{timeout_text}"  # type: ignore[attr-defined]
                 )
-                if timeout_text and last_payload.content and isinstance(last_payload.content[-1], Text):
-                    last_payload.content[-1] = Text(
-                        f"{last_payload.content[-1].text}\n{timeout_text}"  # type: ignore[attr-defined]
-                    )
-                    timeout_upserted = True
-            if not timeout_upserted:
-                response.add_payload(timeout_result.payload)
-        else:
+                timeout_upserted = True
+        if not timeout_upserted:
+            response.add_payload(timeout_result.payload)
+    else:  # TurnTrigger.IDLE_WAIT
+        if session.is_waiting():
             return TurnInputResult(
                 response=response,
                 unread_msgs=[],
@@ -206,7 +240,6 @@ async def prepare_turn_input(
                 has_pending_tool_results=has_pending_tool_results,
                 is_final_timeout=is_final_timeout,
             )
-    else:
         return TurnInputResult(
             response=response,
             unread_msgs=[],
@@ -228,7 +261,6 @@ async def prepare_turn_input(
         is_final_timeout=is_final_timeout,
         is_timeout_turn=is_timeout_turn,
     )
-
 
 
 def filter_messages_already_in_payloads(response: Any, messages: list[Any]) -> list[Any]:

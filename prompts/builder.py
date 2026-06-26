@@ -59,6 +59,15 @@ class NFCPromptBuilder:
             config=config,
             session=session,
         )
+        limits = {
+            "max_initial_chain_payloads": int(
+                getattr(config.prompt, "max_initial_chain_payloads", 0) or 0
+            ),
+            "max_fused_narrative_chars": int(
+                getattr(config.prompt, "max_fused_narrative_chars", 0) or 0
+            ),
+        }
+        setattr(session, "_nfc_context_limits", limits)
         return await self._renderer.render_initial_context(
             chat_stream=chat_stream,
             plan=plan,
@@ -109,7 +118,6 @@ class NFCPromptBuilder:
         consecutive_timeouts: int,
         last_bot_message: str = "",
         max_consecutive_timeouts: int = 3,
-        use_tool_calling: bool = True,
     ) -> LLMPayload:
         """构建等待超时 Payload。
 
@@ -122,7 +130,6 @@ class NFCPromptBuilder:
             consecutive_timeouts: 连续超时次数
             last_bot_message: 最后一条 Bot 发送的消息
             max_consecutive_timeouts: 配置的连续超时上限
-            use_tool_calling: 兼容旧调用参数；当前始终走工具调用协议
 
         Returns:
             LLMPayload: USER 角色的超时 Payload
@@ -135,7 +142,6 @@ class NFCPromptBuilder:
             consecutive_timeouts=consecutive_timeouts,
             last_bot_message=last_bot_message,
             max_consecutive_timeouts=max_consecutive_timeouts,
-            use_tool_calling=use_tool_calling,
         )
 
         return LLMPayload(ROLE.USER, Text(timeout_text))

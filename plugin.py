@@ -12,11 +12,15 @@ from src.app.plugin_system.base import BasePlugin, register_plugin
 from src.kernel.concurrency import get_task_manager
 
 from .actions.do_nothing import DoNothingAction
+from .actions.query_activity_pattern import QueryActivityPatternAction
+from .actions.query_habits import QueryHabitsAction
+from .actions.record_habit import RecordHabitAction
 from .actions.reply import NFCReplyAction
 from .actions.schedule_proactive import ScheduleProactiveAction
 from .chatter import NeoFatumChatter
 from .config import NFCConfig
 from .handlers.proactive_handler import ProactiveHandler
+from .handlers.voice_call_history_handler import VoiceCallHistoryHandler
 from .session import NFCSessionStore
 
 if TYPE_CHECKING:
@@ -30,7 +34,7 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.3.0-beta.1"
+    plugin_version = "2.4.0"
     plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [NFCConfig]
@@ -41,6 +45,11 @@ class NFCPlugin(BasePlugin):
         super().__init__(config)
         max_log_entries = config.prompt.max_log_entries if config else 50
         self._session_store = NFCSessionStore(max_log_entries=max_log_entries)
+
+    @property
+    def session_store(self) -> NFCSessionStore:
+        """公共访问点，供 Action 和 EventHandler 获取 session store。"""
+        return self._session_store
 
     async def on_plugin_loaded(self) -> None:
         """插件加载时注册提示词模板。调度任务延迟到调度器启动后注册。"""
@@ -202,21 +211,39 @@ class NFCPlugin(BasePlugin):
         说明重启期间有消息到达但未被处理。通过事件总线触发恢复。
         """
         import asyncio
-
-        # 等待系统完全启动（流管理器、DB 等就绪）
-        await asyncio.sleep(5.0)
+        import time as _time
 
         from src.app.plugin_system.api.stream_api import get_stream_messages
+        from src.core.transport.distribution.stream_loop_manager import (
+            get_stream_loop_manager,
+        )
 
         config = self.config
         if not isinstance(config, NFCConfig) or not config.general.enabled:
+            return
+
+        # 等待 stream loop manager 就绪，带指数退避重试。
+        # 取代此前固定的 sleep(5.0)：系统启动较慢时，固定等待可能在 slm 尚未
+        # 运行时就放弃恢复，导致重启期间到达的消息全部漏处理。退避重试可在
+        # 系统就绪后尽快恢复，又设上限避免无限等待。
+        slm = get_stream_loop_manager()
+        delay = 1.0
+        max_total_wait = 60.0
+        waited = 0.0
+        while not slm.is_running and waited < max_total_wait:
+            await asyncio.sleep(delay)
+            waited += delay
+            delay = min(delay * 1.5, 10.0)
+        if not slm.is_running:
+            logger.warning(
+                "[NFC] 对话恢复：stream loop manager 启动超时，跳过本次恢复检查"
+            )
             return
 
         session_store = self._session_store
         all_stream_ids = await session_store.list_all_stream_ids()
 
         recovery_window = 600.0  # 只恢复最近 10 分钟内有活动的 session
-        import time as _time
         now = _time.time()
         recovered_count = 0
 
@@ -249,17 +276,11 @@ class NFCPlugin(BasePlugin):
 
                 if latest_msg_time > session.last_activity_at:
                     # 有未处理的消息，启动该流的 Tick 驱动器
-                    from src.core.transport.distribution.stream_loop_manager import (
-                        get_stream_loop_manager,
+                    await slm.start_stream_loop(stream_id)
+                    recovered_count += 1
+                    logger.info(
+                        f"[NFC] 对话恢复：流 {stream_id[:8]} 检测到重启期间未处理消息，已触发恢复"
                     )
-
-                    slm = get_stream_loop_manager()
-                    if slm.is_running:
-                        await slm.start_stream_loop(stream_id)
-                        recovered_count += 1
-                        logger.info(
-                            f"[NFC] 对话恢复：流 {stream_id[:8]} 检测到重启期间未处理消息，已触发恢复"
-                        )
             except Exception as exc:
                 logger.debug(f"[NFC] 对话恢复检查失败: stream={stream_id[:8]}, {exc}")
                 continue
@@ -276,5 +297,9 @@ class NFCPlugin(BasePlugin):
             NFCReplyAction,
             DoNothingAction,
             ScheduleProactiveAction,
+            QueryActivityPatternAction,
+            RecordHabitAction,
+            QueryHabitsAction,
             ProactiveHandler,
+            VoiceCallHistoryHandler,
         ]

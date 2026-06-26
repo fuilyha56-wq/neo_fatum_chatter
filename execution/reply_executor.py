@@ -75,10 +75,20 @@ def coerce_content_segments(content: list[str] | str | None) -> list[str]:
     for item in raw_items:
         if isinstance(item, str):
             text = item.strip()
+        elif isinstance(item, dict):
+            # 有些模型把段落错传成 {"text": "..."} / {"content": "..."} 形式。
+            # 直接 str(dict) 会把 "{'text': '...'}" 原样发出，这里优先提取常见文本键。
+            raw_text = item.get("text") or item.get("content") or ""
+            text = str(raw_text).strip() if raw_text else ""
         else:
             text = str(item).strip()
-        if text:
-            segments.append(text)
+        if not text:
+            continue
+        # 按双换行拆分：模型用空行表达"这是两条独立消息"
+        for part in re.split(r"\n\n+", text):
+            part = part.strip()
+            if part:
+                segments.append(part)
     return segments
 
 

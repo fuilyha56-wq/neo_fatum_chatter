@@ -104,8 +104,8 @@ class NeoFatumChatter(BaseChatter):
     def format_message_line(msg: Any, time_format: str = "%Y-%m-%d %H:%M:%S") -> str:  # type: ignore[override]
         """将单条消息格式化为带标签的显示行（NFC 层覆盖）。
 
-        格式：》时间》[QQ:xxx] 昵称 [\u6d88\u606fid:xxx]\uff1a \u5185\u5bb9
-        两种括号将意義明确区分，避免模型将 QQ 号与消息 ID 混淡。
+        格式：》时间》[QQ:xxx] 昵称 [消息id:xxx]： 内容
+        两种括号将含义明确区分，避免模型将 QQ 号与消息 ID 混淆。
         """
         from datetime import datetime as _dt
 
@@ -270,8 +270,6 @@ class NeoFatumChatter(BaseChatter):
         self,
         response: Any,
         max_retries: int,
-        *,
-        use_tool_calling: bool = True,
     ) -> Any:
         """发送 LLM 请求，实现两阶段"感知→决策"循环。
 
@@ -565,7 +563,7 @@ class NeoFatumChatter(BaseChatter):
         # 确定本次提取的配额
         if image_budget is not None:
             if image_budget.is_exhausted():
-                logger.debug(" 原生多模态: 图片配额已用尽，跳过提取")
+                logger.debug("原生多模态: 图片配额已用尽，跳过提取")
                 return None
             max_items = image_budget.remaining
         else:
@@ -581,12 +579,12 @@ class NeoFatumChatter(BaseChatter):
             if image_budget is not None:
                 image_budget.consume(len(raw_items))
             logger.debug(
-                f" 原生多模态: 提取到 {len(raw_items)} 张图片"
+                f"原生多模态: 提取到 {len(raw_items)} 张图片"
                 f" (配额剩余 {image_budget.remaining if image_budget else 'N/A'})"
             )
             return raw_items
 
-        logger.debug(" 原生多模态: 未读消息中无图片")
+        logger.debug("原生多模态: 未读消息中无图片")
         return None
 
     async def _get_virtual_trigger_message(self) -> Any:

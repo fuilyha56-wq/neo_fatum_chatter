@@ -59,7 +59,10 @@ class NFCConfig(BaseConfig):
         )
         use_tool_calling: bool = Field(
             default=True,
-            description="主动发起和超时上下文是否使用工具调用决策提示，默认启用",
+            description=(
+                "（已废弃）历史上用于切换主动发起/超时上下文是否使用工具调用决策提示。"
+                "NFC 当前统一走工具调用协议，此字段不再生效，保留仅为向后兼容旧配置。"
+            ),
         )
         max_compat_retries: int = Field(
             default=1,
@@ -94,7 +97,7 @@ class NFCConfig(BaseConfig):
             ),
         )
         blocked_tools: list[str] = Field(
-            default=["send_text", "pass_and_wait", "stop_conversation"],
+            default_factory=lambda: ["send_text", "pass_and_wait", "stop_conversation"],
             description=(
                 "需要从工具列表中屏蔽的工具末段名称（不含组件类型前缀）。"
                 "列表中的工具不会暴露给 LLM。"
@@ -167,6 +170,14 @@ class NFCConfig(BaseConfig):
         max_consecutive_timeouts: int = Field(
             default=3, description="连续超时上限，达到后不再等待"
         )
+        suppress_early_wake: bool = Field(
+            default=True,
+            description=(
+                "等待期间收到新消息时是否抑制提前唤醒。"
+                "开启后，Bot 在等待超时到达前不会因为新消息提前触发 LLM，"
+                "所有消息在等待结束后统一处理。"
+            ),
+        )
 
         def apply_rules(self, raw_seconds: float, consecutive_timeouts: int) -> float:
             """应用等待时长规则。raw_seconds <= 0 或 enabled=false 时返回 0。"""
@@ -221,6 +232,18 @@ class NFCConfig(BaseConfig):
                 "系统的沉默触发只是兜底，预约才是主力。"
             ),
             description="schedule_proactive 工具的使用场景指导（会展示在工具描述中，可按需自定义）",
+        )
+        activity_service_signature: str = Field(
+            default="",
+            description=(
+                "活跃度判断服务的签名（如 better_chat_time:service:better_chat_time）。"
+                "为空时使用内置的 is_user_typically_active_now()。"
+                "配置后 ProactiveThinker 优先调此服务的方法来判断活跃度。"
+            ),
+        )
+        activity_service_method: str = Field(
+            default="is_good_time",
+            description="活跃度服务上调用的方法名，该方法需接受 (stream_id: str) 返回 float 0~1",
         )
 
         @field_validator("trigger_probability", mode="after")
@@ -298,6 +321,14 @@ class NFCConfig(BaseConfig):
         )
         max_context_payloads: int = Field(
             default=20, description="LLM 上下文持久化链最大条目数（超出时裁剪最旧的 USER/ASSISTANT 对）"
+        )
+        max_initial_chain_payloads: int = Field(
+            default=12,
+            description="execute 启动时最多恢复进 LLM 的持久化 chain payload 条数，不影响持久化保留数量",
+        )
+        max_fused_narrative_chars: int = Field(
+            default=12000,
+            description="融合叙事最大字符数，超出时仅保留最近部分，降低框架 token 裁剪触发概率",
         )
         compress_every_n_rounds: int = Field(
             default=50,

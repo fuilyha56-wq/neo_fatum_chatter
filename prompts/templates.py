@@ -76,6 +76,7 @@ NFC_SYSTEM_PROMPT = """<existence_logic>
 - **回复质量**：不要为了回复而回复。如果你认为当前语境下保持沉默更有意义，请使用对应的沉默动作。
 </behavioral_guidance>
 
+{negative_behaviors_section}
 
 <the_inner_voice>
 # 内心独白 (MentalLog) 准则

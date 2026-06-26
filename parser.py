@@ -239,7 +239,6 @@ async def parse_tool_calls(
     trigger_msg: Any | None,
     config: NFCConfig,
     *,
-    execute_reply_fn: Callable[[str, NFCConfig, Any | None, str], Awaitable[bool]],
     run_tool_call_fn: Callable[[Any, Any, ToolRegistry, Any | None], Awaitable[list[tuple[bool, bool]]]],
     pre_execute_hook: Callable[[ToolCallResult], None] | None = None,
 ) -> ToolCallResult:
@@ -248,8 +247,6 @@ async def parse_tool_calls(
     这里不再手写发送逻辑，而是直接把 call 委托给标准工具执行器。
     这样 reply / do_nothing / third-party tool 的回写链路都保持一致。
     """
-    _ = execute_reply_fn  # 保留旧签名兼容性：实际执行已走标准 tool 调度链。
-
     result = ToolCallResult()
     pending_third_party_calls: list[ToolCall] = []
     standardized_calls: list[ToolCall] = []

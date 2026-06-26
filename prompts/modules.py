@@ -60,6 +60,14 @@ def register_nfc_prompts() -> None:
             "safety_guidelines": optional(
                 "\n".join(personality.safety_guidelines)
             ),
+            "negative_behaviors_section": optional(
+                "\n".join(personality.negative_behaviors)
+            ).then(min_len(1)).then(
+                wrap(
+                    "<absolute_prohibitions>\n以下行为绝对禁止，无论任何情境你都不得违反：\n",
+                    "\n</absolute_prohibitions>",
+                )
+            ),
             "custom_decision_prompt": optional(""),
             "scene_state_info": optional(""),
             # reply_mode_instruction 由 _build_initial_context 动态注入，此处提供 tool calling 兜底
@@ -96,7 +104,6 @@ async def build_proactive_context(
     silence_minutes: float,
     recent_activity: str,
     scheduled_reason: str = "",
-    use_tool_calling: bool = True,
 ) -> str:
     """构建主动发起上下文。"""
     pm = get_prompt_manager()
@@ -111,7 +118,6 @@ async def build_proactive_context(
     else:
         silence_str = f"{silence_minutes:.0f} 分钟"
 
-    _ = use_tool_calling
     decision_instruction = NFC_PROACTIVE_DECISION_TOOL_CALLING
 
     result = await (
@@ -135,7 +141,6 @@ def build_timeout_context(
     consecutive_timeouts: int,
     last_bot_message: str = "",
     max_consecutive_timeouts: int = 3,
-    use_tool_calling: bool = True,
 ) -> str:
     """构建等待超时决策上下文。
 
@@ -145,7 +150,6 @@ def build_timeout_context(
         consecutive_timeouts: 连续超时次数（含本次）
         last_bot_message: 最后一条 Bot 发送的消息
         max_consecutive_timeouts: 配置的连续超时上限
-        use_tool_calling: 兼容旧调用参数；当前始终走工具调用协议
     """
     elapsed_minutes = elapsed_seconds / 60
     is_first = consecutive_timeouts == 1
@@ -183,7 +187,6 @@ def build_timeout_context(
         )
 
     # ── 操作指令 ──
-    _ = use_tool_calling
     if is_last:
         decision_instructions = (
             "本次等待到此为止，**不得**再设置新的等待（`max_wait_seconds` 必须为 0）。"

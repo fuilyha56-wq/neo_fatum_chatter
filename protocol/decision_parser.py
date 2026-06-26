@@ -99,7 +99,6 @@ async def parse_response_decision(
     trigger_msg: Any | None,
     config: Any,
     *,
-    execute_reply_fn: Callable[[str, Any, Any | None, str], Awaitable[bool]],
     run_tool_call_fn: Callable[[Any, Any, Any, Any | None], Awaitable[list[tuple[bool, bool]]]],
     pre_execute_hook: Callable[[ToolCallResult], None] | None = None,
 ) -> Decision:
@@ -109,7 +108,6 @@ async def parse_response_decision(
         usable_map,
         trigger_msg,
         config,
-        execute_reply_fn=execute_reply_fn,
         run_tool_call_fn=run_tool_call_fn,
         pre_execute_hook=pre_execute_hook,
     )

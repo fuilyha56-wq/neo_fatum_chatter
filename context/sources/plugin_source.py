@@ -78,6 +78,7 @@ async def collect_plugin_turn_contributions(
                 "values": values,
                 "policies": {},
                 "strict": False,
+                "context_contributions": [],
             },
         )
 

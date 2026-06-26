@@ -47,3 +47,9 @@ config/local_*.toml
 
 # Claude Code
 .claude/
+
+# Agent session logs (may contain sensitive conversation data)
+.agents/
+
+# Temporary files
+temp_*.txt

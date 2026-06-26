@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,6 +54,22 @@ _PERCEPTION_TAG_RE = re.compile(
     r"</(?:perception_completed|unsent_perception_draft|inner_response_to_silence)>\s*\n?",
     re.DOTALL,
 )
+
+
+def _optional_float(value: Any) -> float | None:
+    """将值转为 float，若为 None 返回 None。用于 from_dict 中时间戳字段。"""
+    if value is None:
+        return None
+    return float(value)
+
+
+def _is_real_number(value: Any) -> bool:
+    """判断是否为真正的数值（排除 bool，bool 是 int 的子类）。
+
+    JSON 中损坏的 ``true`` / ``false`` 会被解析为 Python ``bool``，
+    若用 ``isinstance(value, (int, float))`` 校验会被误判为合法时间戳/计数。
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def strip_persisted_system_reminders(text: str) -> str:
@@ -125,6 +142,11 @@ class NFCSession:
     # 用户活跃时段学习：按小时统计活跃次数
     # 格式：{hour_int: count}，24 个槽位
     activity_hours: dict[str, int] = field(default_factory=dict)
+
+    # 用户习惯观察：LLM 主动记录的作息、行为模式等
+    # 每条格式：{"habit_text": str, "category": str, "recorded_at": float}
+    user_habits: list[dict[str, Any]] = field(default_factory=list)
+    _max_habit_entries: int = field(default=50, repr=False)
 
     # 统计
     total_interactions: int = 0
@@ -238,7 +260,6 @@ class NFCSession:
         if not self.mood_history:
             return ""
         recent = self.mood_history[-recent_n:]
-        from collections import Counter
         counter = Counter(entry["mood"] for entry in recent)
         return counter.most_common(1)[0][0] if counter else ""
 
@@ -271,6 +292,28 @@ class NFCSession:
         # 如果当前小时的活跃占比超过平均值的 50%，认为活跃
         avg = total / 24.0
         return hour_count >= avg * 0.5
+
+    def add_habit(self, habit_text: str, category: str = "") -> None:
+        """记录一条用户习惯观察。"""
+        if not habit_text or not habit_text.strip():
+            return
+        self.user_habits.append({
+            "habit_text": habit_text.strip(),
+            "category": category.strip(),
+            "recorded_at": time.time(),
+        })
+        if len(self.user_habits) > self._max_habit_entries:
+            self.user_habits = self.user_habits[-self._max_habit_entries:]
+
+    def get_habits(self, category: str = "") -> list[dict[str, Any]]:
+        """获取已记录的习惯观察，可按分类过滤。"""
+        if not category or not category.strip():
+            return list(self.user_habits)
+        cat = category.strip().lower()
+        return [
+            h for h in self.user_habits
+            if h.get("category", "").lower() == cat
+        ]
 
     def update_chain(
         self, new_entries: list[dict[str, Any]], max_payloads: int
@@ -379,6 +422,7 @@ class NFCSession:
             "scene_state": self.scene_state.to_dict(),
             "mood_history": self.mood_history,
             "activity_hours": self.activity_hours,
+            "user_habits": self.user_habits,
         }
 
     @classmethod
@@ -402,9 +446,9 @@ class NFCSession:
         )
         session.created_at = float(data.get("created_at", time.time()))
         session.last_activity_at = float(data.get("last_activity_at", time.time()))
-        session.last_user_message_at = data.get("last_user_message_at")
-        session.last_proactive_at = data.get("last_proactive_at")
-        session.scheduled_proactive_at = data.get("scheduled_proactive_at")
+        session.last_user_message_at = _optional_float(data.get("last_user_message_at"))
+        session.last_proactive_at = _optional_float(data.get("last_proactive_at"))
+        session.scheduled_proactive_at = _optional_float(data.get("scheduled_proactive_at"))
         session.scheduled_proactive_reason = data.get("scheduled_proactive_reason", "")
         session.mental_log = MentalLog.from_list(
             data.get("mental_log", []),
@@ -439,7 +483,7 @@ class NFCSession:
                 entry for entry in raw_mood
                 if isinstance(entry, dict)
                 and isinstance(entry.get("mood", ""), str)
-                and isinstance(entry.get("ts", 0), (int, float))
+                and _is_real_number(entry.get("ts", 0))
             ]
         else:
             session.mood_history = []
@@ -448,8 +492,20 @@ class NFCSession:
         if isinstance(raw_hours, dict):
             session.activity_hours = {
                 str(k): int(v) for k, v in raw_hours.items()
-                if isinstance(v, (int, float))
+                if _is_real_number(v)
             }
         else:
             session.activity_hours = {}
+        # 用户习惯观察
+        raw_habits = data.get("user_habits", [])
+        if isinstance(raw_habits, list):
+            session.user_habits = [
+                entry for entry in raw_habits
+                if isinstance(entry, dict)
+                and isinstance(entry.get("habit_text"), str)
+                and entry.get("habit_text", "").strip()
+                and _is_real_number(entry.get("recorded_at"))
+            ]
+        else:
+            session.user_habits = []
         return session
