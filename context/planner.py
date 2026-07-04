@@ -62,14 +62,40 @@ class ContextPlanner:
         *,
         formatted_unreads: str,
         stream_id: str = "",
+        session: Any = None,
     ) -> ContextPlan:
         """规划本轮用户输入和第三方上下文贡献。
 
         将收集到的贡献按 scope 分为：
         - session: 缓存复用，内容变更时静默更新
         - turn: 每轮独立
+
+        主动思考触发时，ProactiveHandler 把富上下文写入 session.pending_proactive_context，
+        此处读取后作为 turn contribution（owner=notice）注入到 transient extra_payload，
+        避免动态内容写入 user_text 破坏 LLM prompt prefix cache。触发消息 content 使用
+        稳定占位符 ``[proactive_trigger]``，从 user_text 移除后只剩稳定结构。
         """
-        user_text = f"[新消息]\n{formatted_unreads}"
+        # 主动思考富上下文：从 session 读取并清空，作为 turn contribution 注入
+        proactive_context = ""
+        if session is not None:
+            proactive_context = str(getattr(session, "pending_proactive_context", "") or "")
+            if proactive_context:
+                try:
+                    session.pending_proactive_context = ""
+                except Exception:
+                    pass
+
+        # 若本轮是主动思考触发，从 formatted_unreads 中移除占位符行，使 user_text 稳定
+        cleaned_unreads = formatted_unreads
+        if proactive_context and "[proactive_trigger]" in formatted_unreads:
+            lines = formatted_unreads.splitlines()
+            kept = [line for line in lines if "[proactive_trigger]" not in line]
+            cleaned_unreads = "\n".join(kept).strip()
+
+        user_text = (
+            f"[新消息]\n{cleaned_unreads}"
+            "\n\n---\n重申：你的响应必须仅包含工具调用（nfc_reply 或 do_nothing），不要在文本区域输出任何内容。"
+        )
         all_contributions = await collect_plugin_turn_contributions(
             prompt_name="NFC_user_prompt",
             content=user_text,
@@ -94,6 +120,19 @@ class ContextPlanner:
             formatted_unreads,
             turn_raw,
         )
+
+        # 主动思考富上下文作为 turn contribution 注入（owner=notice, scope=turn）
+        if proactive_context:
+            turn_contributions.append(
+                ContextContribution(
+                    source="nfc.proactive_trigger",
+                    owner="notice",
+                    scope="turn",
+                    priority=100,
+                    ttl_turns=1,
+                    content=proactive_context,
+                )
+            )
 
         return ContextPlan(
             user_text=user_text,

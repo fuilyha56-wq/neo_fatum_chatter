@@ -30,6 +30,8 @@ class SummaryService:
         session_store: NFCSessionStore | None = None,
     ) -> bool:
         """按当前 session 状态决定是否调度近期摘要压缩。"""
+        if not getattr(config.prompt, "summary_enabled", True):
+            return False
         trigger_empty = not session.history_summary
         trigger_periodic = should_compress(session, config)
         if not (trigger_empty or trigger_periodic):

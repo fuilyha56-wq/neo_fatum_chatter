@@ -41,6 +41,10 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Type checker / linter caches
+.mypy_cache/
+.ruff_cache/
+
 # MoFox-Bot specific
 config/local_*.toml
 *.log

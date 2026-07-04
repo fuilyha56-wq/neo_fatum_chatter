@@ -83,6 +83,7 @@ class NFCPromptBuilder:
         formatted_unreads: str,
         media_items: list[Any] | None = None,
         stream_id: str = "",
+        session: Any = None,
     ) -> tuple[LLMPayload, LLMPayload | None]:
         """构建用户消息 Payload。
 
@@ -99,6 +100,7 @@ class NFCPromptBuilder:
             formatted_unreads: 格式化后的未读消息文本
             media_items: 多模态图片列表（可选，来自 extract_media_from_messages）
             stream_id: 当前聊天流 ID（供 on_prompt_build 事件处理器读取）
+            session: 当前 NFCSession，用于读取 pending_proactive_context 等运行时字段
 
         Returns:
             tuple: (user_payload, extra_payload | None)
@@ -108,6 +110,7 @@ class NFCPromptBuilder:
         plan = await self._planner.plan_user_turn(
             formatted_unreads=formatted_unreads,
             stream_id=stream_id,
+            session=session,
         )
         return self._renderer.render_user_payload(plan, media_items=media_items)
 
@@ -142,6 +145,11 @@ class NFCPromptBuilder:
             consecutive_timeouts=consecutive_timeouts,
             last_bot_message=last_bot_message,
             max_consecutive_timeouts=max_consecutive_timeouts,
+        )
+
+        # 末尾工具调用强化提示（与 plan_user_turn 保持一致）
+        timeout_text += (
+            "\n\n---\n重申：你的响应必须仅包含工具调用（nfc_reply 或 do_nothing），不要在文本区域输出任何内容。"
         )
 
         return LLMPayload(ROLE.USER, Text(timeout_text))

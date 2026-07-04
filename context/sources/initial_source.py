@@ -55,6 +55,8 @@ def build_initial_context_plan(
         )
 
     history_summary = str(getattr(session, "history_summary", "") or "")
+    if not getattr(config.prompt, "summary_enabled", True):
+        history_summary = ""
     chain_cutoff_ts = getattr(session, "chain_cutoff_ts", 0.0) or 0.0
     history_before_ts = chain_cutoff_ts if chain_cutoff_ts > 0 else None
 

@@ -111,6 +111,11 @@ class NFCSession:
     scheduled_proactive_at: float | None = None
     scheduled_proactive_reason: str = ""  # 预约时给出的理由，触发时注入提示词
 
+    # 主动思考触发时由 ProactiveHandler 写入的富上下文（silence/recent_activity/reason）。
+    # 仅运行时传递，不持久化：plan_user_turn 读取后作为 turn contribution 注入到
+    # transient extra_payload，避免写入 user_text 破坏 prompt prefix cache。
+    pending_proactive_context: str = ""
+
     # 心理活动流
     mental_log: MentalLog = field(default_factory=MentalLog)
 
@@ -138,6 +143,12 @@ class NFCSession:
     # 每条格式：{"mood": str, "ts": float}
     mood_history: list[dict[str, Any]] = field(default_factory=list)
     _max_mood_entries: int = field(default=30, repr=False)
+
+    # 抑制期消息缓冲：当 wait.suppress_early_wake=true 时，等待期间到达的
+    # 新消息会被显式收集到这里（按 message_id 去重），等待超时后一次性
+    # 合并为单条 USER payload 注入，避免每条新消息都触发一次上下文构建。
+    # 注意：仅在运行时使用，不参与持久化。
+    suppressed_messages: list[Any] = field(default_factory=list, repr=False)
 
     # 用户活跃时段学习：按小时统计活跃次数
     # 格式：{hour_int: count}，24 个槽位

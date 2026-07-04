@@ -98,19 +98,27 @@ async def prepare_turn_input(
 
     if trigger == TurnTrigger.NEW_MESSAGES:
         # 等待期间抑制提前唤醒：收到新消息但 session 仍在 waiting 且未超时时，
-        # 不立即处理，返回 Wait(remaining) 让消息累积到超时后统一处理。
+        # 不立即处理，把消息显式收集到 session.suppressed_messages，
+        # 等待超时后由下方"超时合并"分支一次性合并为单条 USER payload。
         if (
             config.wait.suppress_early_wake
             and session.is_waiting()
             and not session.waiting_config.is_timeout()
         ):
-            remaining = max(
-                0.0,
-                session.waiting_config.max_wait_seconds
-                - session.waiting_config.get_elapsed_seconds(),
-            )
+            _collect_suppressed_messages(session, unread_msgs)
+            # 用绝对截止时间计算 remaining，避免每条新消息都重新计时把超时点往后推
+            started_at = getattr(session.waiting_config, "started_at", None)
+            max_wait = float(getattr(session.waiting_config, "max_wait_seconds", 0.0) or 0.0)
+            if isinstance(started_at, (int, float)) and max_wait > 0:
+                remaining = max(0.0, started_at + max_wait - time.time())
+            else:
+                remaining = max(
+                    0.0,
+                    max_wait - session.waiting_config.get_elapsed_seconds(),
+                )
             logger.debug(
-                f"[等待抑制] 有新消息但仍在等待中，剩余 {remaining:.1f}s，不处理"
+                f"[等待抑制] 收集 {len(unread_msgs)} 条新消息到缓冲区"
+                f"（累计 {len(session.suppressed_messages)} 条），剩余 {remaining:.1f}s"
             )
             return TurnInputResult(
                 response=response,
@@ -120,6 +128,28 @@ async def prepare_turn_input(
                 history_images_injected=history_images_injected,
                 has_pending_tool_results=has_pending_tool_results,
                 is_final_timeout=is_final_timeout,
+            )
+
+        # 超时已到 + 抑制期有缓冲消息：一次性合并消费，避免对每条缓冲消息
+        # 单独构建上下文。注意：此分支也会把当前 fetch_unreads 拿到的最新
+        # 未读消息一并纳入合并（它们尚未进入 suppressed_messages）。
+        if (
+            config.wait.suppress_early_wake
+            and session.suppressed_messages
+        ):
+            _collect_suppressed_messages(session, unread_msgs)
+            buffered = _drain_suppressed_messages(session)
+            return await _build_suppressed_batch_turn(
+                chatter=chatter,
+                response=response,
+                chat_stream=chat_stream,
+                config=config,
+                session=session,
+                prompt_builder=prompt_builder,
+                image_budget=image_budget,
+                has_history=has_history,
+                history_images_injected=history_images_injected,
+                buffered_msgs=buffered,
             )
 
         formatted_text, unread_msgs = await chatter._accumulate_messages(config)
@@ -183,6 +213,7 @@ async def prepare_turn_input(
             formatted_unreads=formatted_text,
             media_items=media_items,
             stream_id=chatter.stream_id,
+            session=session,
         )
 
         close_pending_tool_chain(response, reason="新消息到达")
@@ -208,6 +239,23 @@ async def prepare_turn_input(
     elif trigger == TurnTrigger.FOLLOWUP_TOOL_RESULT:
         has_pending_tool_results = False
     elif trigger == TurnTrigger.TIMEOUT_EXPIRED:
+        # 优先消费抑制期显式缓冲的消息：若有，合并为单条 USER payload，
+        # 走与 NEW_MESSAGES 相同的注入路径，避免对每条缓冲消息单独构建上下文。
+        buffered = _drain_suppressed_messages(session)
+        if buffered:
+            return await _build_suppressed_batch_turn(
+                chatter=chatter,
+                response=response,
+                chat_stream=chat_stream,
+                config=config,
+                session=session,
+                prompt_builder=prompt_builder,
+                image_budget=image_budget,
+                has_history=has_history,
+                history_images_injected=history_images_injected,
+                buffered_msgs=buffered,
+            )
+
         timeout_result = timeout_service.build_timeout_result(
             response,
             session,
@@ -260,6 +308,148 @@ async def prepare_turn_input(
         has_pending_tool_results=has_pending_tool_results,
         is_final_timeout=is_final_timeout,
         is_timeout_turn=is_timeout_turn,
+    )
+
+
+def _collect_suppressed_messages(session: NFCSession, messages: list[Any]) -> None:
+    """把抑制期间到达的新消息追加到 session.suppressed_messages（按 message_id 去重）。"""
+    if not messages:
+        return
+    existing_ids = {
+        str(getattr(m, "message_id", "") or "")
+        for m in session.suppressed_messages
+        if getattr(m, "message_id", None) is not None
+    }
+    for msg in messages:
+        mid = getattr(msg, "message_id", None)
+        if mid is not None and str(mid) in existing_ids:
+            continue
+        session.suppressed_messages.append(msg)
+        if mid is not None:
+            existing_ids.add(str(mid))
+
+
+def _drain_suppressed_messages(session: NFCSession) -> list[Any]:
+    """取出并清空 session.suppressed_messages，返回去重后的消息列表。"""
+    if not session.suppressed_messages:
+        return []
+    drained = dedupe_messages_by_id(session.suppressed_messages)
+    session.suppressed_messages = []
+    return drained
+
+
+async def _build_suppressed_batch_turn(
+    *,
+    chatter: NeoFatumChatter,
+    response: Any,
+    chat_stream: ChatStream,
+    config: NFCConfig,
+    session: NFCSession,
+    prompt_builder: NFCPromptBuilder,
+    image_budget: Any,
+    has_history: bool,
+    history_images_injected: bool,
+    buffered_msgs: list[Any],
+) -> TurnInputResult:
+    """把抑制期缓冲的所有消息合并为单条 USER payload 并注入。
+
+    复用 NEW_MESSAGES 分支的注入逻辑（add_user_message / build_user_payload /
+    历史图片 / upsert 合并），但只调用一次 build_user_payload，确保上下文构建不重复。
+    """
+    filtered = filter_messages_already_in_payloads(response, buffered_msgs)
+    if not filtered:
+        # 缓冲消息全部已存在于 payload 中（罕见，可能被其他路径注入过），
+        # 退化为常规超时分支。重新塞回 session 让上层走 timeout 路径。
+        return TurnInputResult(
+            response=response,
+            unread_msgs=[],
+            next_signal=Wait(),
+            continue_loop=True,
+            history_images_injected=history_images_injected,
+            has_pending_tool_results=False,
+            is_final_timeout=False,
+            is_timeout_turn=False,
+        )
+
+    formatted_text = "\n".join(
+        chatter.format_message_line(message, time_format="%Y-%m-%d %H:%M:%S")
+        for message in filtered
+    )
+    logger.info(
+        f"[等待抑制] 超时到期，一次性合并 {len(filtered)} 条缓冲消息为单条 USER payload"
+    )
+
+    for msg in filtered:
+        sender_id = getattr(msg, "sender_id", "")
+        session.add_user_message(
+            content=getattr(msg, "processed_plain_text", "")
+            or str(getattr(msg, "content", "")),
+            user_name=getattr(msg, "sender_name", "用户"),
+            user_id=sender_id,
+            timestamp=chatter._extract_timestamp(msg),
+            message_id=getattr(msg, "message_id", ""),
+        )
+        if sender_id:
+            session.user_id = sender_id
+        if chat_stream.platform:
+            session.platform = chat_stream.platform
+
+    if session.is_waiting():
+        chatter._record_reply_timing(session)
+        session.clear_waiting()
+
+    media_items = chatter._extract_media(filtered, config, image_budget)
+
+    if (
+        not history_images_injected
+        and has_history
+        and image_budget is not None
+        and not image_budget.is_exhausted()
+    ):
+        history_images_injected = True
+        history_imgs = chatter._extract_history_media(chat_stream, image_budget)
+        from ..services import MultimodalService
+
+        MultimodalService.append_history_reference(response, history_imgs)
+
+    user_payload, extra_payload = await prompt_builder.build_user_payload(
+        formatted_unreads=formatted_text,
+        media_items=media_items,
+        stream_id=chatter.stream_id,
+        session=session,
+    )
+
+    close_pending_tool_chain(response, reason="抑制期消息合并到达")
+
+    upserted = False
+    if (
+        not media_items
+        and response.payloads
+        and response.payloads[-1].role == ROLE.USER
+    ):
+        last_payload = response.payloads[-1]
+        if last_payload.content and isinstance(last_payload.content[-1], Text):
+            existing = last_payload.content[-1].text  # type: ignore[attr-defined]
+            last_payload.content[-1] = Text(
+                f"{existing}\n{user_payload.content[-1].text}"  # type: ignore[attr-defined]
+                if isinstance(user_payload.content, list)
+                else f"{existing}\n{user_payload.content.text}"  # type: ignore[attr-defined]
+            )
+            upserted = True
+            logger.debug("[NFC] Upsert USER payload（抑制期消息合并）")
+    if not upserted:
+        response.add_payload(user_payload)
+
+    prepare_payload_chain_for_send(response, reason="抑制期合并完成")
+
+    return TurnInputResult(
+        response=response,
+        unread_msgs=filtered,
+        extra_payload=extra_payload,
+        history_images_injected=history_images_injected,
+        has_pending_tool_results=False,
+        is_final_timeout=False,
+        is_timeout_turn=False,
     )
 
 
@@ -333,9 +523,14 @@ async def commit_turn_decision(
     if decision.mood:
         session.record_mood(decision.mood)
 
-    assistant_text = (getattr(response, "message", "") or "").strip()
+    # 优先用实际发送的可见回复（decision.reply_text），fallback 才是 response.message。
+    # 原因：tool call 续轮路径下，模型可能只输出 tool_call 无 Text，response.message 为空；
+    # 而 decision.visible_reply_segments 由 parser 从 nfc_reply content 提取得来，
+    # 是真正发给用户的内容。若优先取 response.message，会写入空字符串或 reasoning 文本，
+    # 导致 chain 丢失 assistant 条目或写入错误文本。
+    assistant_text = decision.reply_text.strip()
     if not assistant_text:
-        assistant_text = decision.reply_text
+        assistant_text = (getattr(response, "message", "") or "").strip()
     if pre_send_user_text and assistant_text:
         if chain_user_pre_saved:
             session.update_chain(

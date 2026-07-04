@@ -316,6 +316,14 @@ class NFCConfig(BaseConfig):
     class PromptSection(SectionBase):
         """提示词配置。"""
 
+        summary_enabled: bool = Field(
+            default=True,
+            description=(
+                "是否启用近期记忆摘要。"
+                "关闭后不再触发摘要压缩任务，也不再向提示词注入 history_summary；"
+                "session 中已存在的旧摘要不会被清除，但不会再出现在上下文中。"
+            ),
+        )
         max_log_entries: int = Field(
             default=50, description="最大活动流条目数"
         )

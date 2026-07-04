@@ -158,8 +158,28 @@ class ProactiveHandler(BaseEventHandler):
         except Exception as e:
             logger.debug(f"构建主动发起上下文失败，使用默认消息: {e}")
 
-        # 构造系统触发消息并注入
-        trigger_message = self._build_proactive_message(stream_id, chat_stream, target_user_id, proactive_content)
+        # 把富上下文存到 session 临时字段，由 plan_user_turn 作为 turn contribution 注入。
+        # 触发消息 content 用稳定占位符，避免每次主动思考的 user_text 都不同而破坏
+        # LLM prompt prefix cache。
+        try:
+            from ..plugin import NFCPlugin
+            if isinstance(self.plugin, NFCPlugin):
+                store = self.plugin._session_store  # type: ignore[attr-defined]
+                async with store.lock(stream_id):
+                    session = await store.get(stream_id)
+                    if session is not None:
+                        session.pending_proactive_context = proactive_content
+                        await store.save(session)
+        except Exception as e:
+            logger.warning(f"写入 pending_proactive_context 失败: {e}")
+
+        # 触发消息 content 使用稳定占位符；富上下文走 contribution 注入路径
+        trigger_message = self._build_proactive_message(
+            stream_id,
+            chat_stream,
+            target_user_id,
+            "[proactive_trigger] 主动思考触发，请发起对话",
+        )
         context.add_unread_message(trigger_message)
         logger.debug(f"已注入主动发起触发消息到流 {stream_id[:8]}")
 

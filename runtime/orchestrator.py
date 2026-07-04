@@ -51,12 +51,14 @@ _SUMMARY_MARKER_PREFIX = "【你对"
 _SUMMARY_MARKER_SUFFIX = "的近期记忆】"
 
 
-def _hot_update_summary(response: Any, session: Any) -> None:
+def _hot_update_summary(response: Any, session: Any, config: Any) -> None:
     """当异步压缩完成后，热替换 response chain 中的 summary 部分。
 
     定位动态 USER payload 中以「【你对...的近期记忆】」开头的段落，
     如果 session.history_summary 已更新则原地替换，使当前对话立即受益。
     """
+    if not getattr(getattr(config, "prompt", None), "summary_enabled", True):
+        return
     new_summary = getattr(session, "history_summary", "") or ""
     if not new_summary.strip():
         return
@@ -280,7 +282,7 @@ async def execute_orchestrator(
 
     while True:
         heal_orphan_tool_results(response, where="loop-top")
-        _hot_update_summary(response, session)
+        _hot_update_summary(response, session, config)
         turn_input = await prepare_turn_input(
             chatter,
             response,
@@ -369,8 +371,28 @@ async def execute_orchestrator(
                 )
                 if interrupt_msgs:
                     loop_state.extra_payload = None
+                    # 先 flush 上一轮已处理的 unread，避免与打断消息混入同一批
                     await chatter.flush_unreads(unread_msgs or [])
+                    # 把打断消息内容持久化到 mental_log（add_user_message），
+                    # 否则 mental_log 只有 add_interrupt_event 的概要、丢失真实消息内容
+                    for msg in interrupt_msgs:
+                        sender_id = getattr(msg, "sender_id", "")
+                        session.add_user_message(
+                            content=getattr(msg, "processed_plain_text", "")
+                            or str(getattr(msg, "content", "")),
+                            user_name=getattr(msg, "sender_name", "用户"),
+                            user_id=sender_id,
+                            timestamp=chatter._extract_timestamp(msg),
+                            message_id=getattr(msg, "message_id", ""),
+                        )
+                        if sender_id:
+                            session.user_id = sender_id
                     session.add_interrupt_event(interrupt_msgs)
+                    # 关键：清掉 waiting 状态，否则下一轮 NEW_MESSAGES 会命中
+                    # suppress_early_wake 抑制分支，把打断消息压到 suppressed_messages
+                    # 直到 max_wait_seconds 超时才处理，表现为 bot "装哑"
+                    if session.is_waiting():
+                        session.clear_waiting()
                     await chatter._save_session(session)
                     continue
                 if new_response is None:
