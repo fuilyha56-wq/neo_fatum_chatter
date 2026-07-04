@@ -34,7 +34,7 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.4.0"
+    plugin_version = "2.5.4"
     plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [NFCConfig]
@@ -291,9 +291,15 @@ class NFCPlugin(BasePlugin):
             logger.debug("[NFC] 对话中断恢复检查完成：无需恢复")
 
     def get_components(self) -> list[type]:
-        """获取插件内所有组件类。"""
-        return [
-            NeoFatumChatter,
+        """获取插件内所有组件类（enabled=false 时不注册 Chatter）。
+
+        Chatter 是否注册由 ``config.general.enabled`` 控制：
+        - True：注册 ``NeoFatumChatter``，由 chatter_manager 正常选中
+        - False：不注册 ``NeoFatumChatter``，重启后 chatter_manager 选不到 NFC，
+          自然回退到 DFC 等其他 chatter。其他组件（actions/handlers）仍正常注册，
+          满足"插件可被发现和加载，但不参与 chatter 调度"的语义。
+        """
+        components: list[type] = [
             NFCReplyAction,
             DoNothingAction,
             ScheduleProactiveAction,
@@ -303,3 +309,70 @@ class NFCPlugin(BasePlugin):
             ProactiveHandler,
             VoiceCallHistoryHandler,
         ]
+        config = self.config
+        if isinstance(config, NFCConfig) and config.general.enabled:
+            components.append(NeoFatumChatter)
+        return components
+
+    async def on_config_updated(self) -> None:
+        """配置更新后动态注册/注销 Chatter。
+
+        - ``enabled=True``：补注册 ``NeoFatumChatter``（首次加载时已注册则跳过）。
+        - ``enabled=False``：注销 Chatter 组件，并清理所有运行中的 NFC active
+          chatter 实例，再强制重启受影响的流循环，让 ``ChatterManager`` 重新选
+          chatter（DFC 等才能接管）。否则旧的 NFC 生成器仍卡在
+          ``_active_chatters`` / ``_chatter_genes`` 中，关闭开关后照样跳过 DFC。
+        """
+        from src.core.components.registry import get_global_registry
+        from src.core.components.state_manager import get_global_state_manager
+        from src.core.components.types import ComponentState, ComponentType, build_signature
+        from src.core.managers.chatter_manager import get_chatter_manager
+        from src.core.transport.distribution.stream_loop_manager import (
+            get_stream_loop_manager,
+        )
+
+        config = self.config
+        if not isinstance(config, NFCConfig):
+            return
+
+        registry = get_global_registry()
+        state_manager = get_global_state_manager()
+        sig = build_signature(
+            "neo_fatum_chatter", ComponentType.CHATTER, "neo_fatum_chatter"
+        )
+
+        if config.general.enabled:
+            if sig not in registry.get_by_plugin("neo_fatum_chatter"):
+                registry.register(NeoFatumChatter)
+                await state_manager.set_state_async(sig, ComponentState.ACTIVE)
+                logger.info("NFC Chatter 已动态注册（enabled=true）")
+            return
+
+        # enabled=False：注销组件 + 清 active + 重启流
+        if sig in registry.get_by_plugin("neo_fatum_chatter"):
+            registry.unregister(sig)
+            await state_manager.set_state_async(sig, ComponentState.UNLOADED)
+            logger.info("NFC Chatter 已动态注销（enabled=false）")
+
+        chatter_manager = get_chatter_manager()
+        stream_loop_manager = get_stream_loop_manager()
+        active_chatters = chatter_manager.get_active_chatters()
+        affected_streams = [
+            stream_id
+            for stream_id, chatter in active_chatters.items()
+            if getattr(chatter, "chatter_name", "") == "neo_fatum_chatter"
+        ]
+        if not affected_streams:
+            return
+
+        for stream_id in affected_streams:
+            chatter_manager.unregister_active_chatter(stream_id)
+            try:
+                await stream_loop_manager.restart_stream_loop(stream_id)
+            except Exception as exc:
+                logger.warning(
+                    f"重启流 {stream_id[:8]} 失败（chatter 已注销，下次 tick 会自然重选）: {exc}"
+                )
+        logger.info(
+            f"NFC 已关闭：清理 {len(affected_streams)} 个活跃流并触发重启以让出 chatter 调度"
+        )

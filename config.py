@@ -392,6 +392,28 @@ class NFCConfig(BaseConfig):
             """将消息缓冲与轮询时间规整为非负数。"""
             return max(0.0, float(value))
 
+    @config_section("flashback")
+    class FlashbackSection(SectionBase):
+        """注入点兼容配置。"""
+
+        injection_point: str = Field(
+            default="default_chatter_user_prompt",
+            description=(
+                "NFC user prompt 构建时触发的 on_prompt_build 事件注入点名称。"
+                "默认对齐 booku_memory 等主流注入器订阅的 default_chatter_user_prompt；"
+                "需要回退到 NFC 私有注入点名时改为 NFC_user_prompt。"
+            ),
+        )
+
+        @field_validator("injection_point", mode="after")
+        @classmethod
+        def _validate_injection_point(cls, value: str) -> str:
+            """空字符串回退到默认注入点名。"""
+            v = (value or "").strip()
+            if not v:
+                return "default_chatter_user_prompt"
+            return v
+
     @config_section("debug")
     class DebugSection(SectionBase):
         """调试配置。"""
@@ -411,4 +433,5 @@ class NFCConfig(BaseConfig):
     reply: ReplySection = Field(default_factory=ReplySection)
     prompt: PromptSection = Field(default_factory=PromptSection)
     buffer: BufferSection = Field(default_factory=BufferSection)
+    flashback: FlashbackSection = Field(default_factory=FlashbackSection)
     debug: DebugSection = Field(default_factory=DebugSection)

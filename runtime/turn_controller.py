@@ -214,6 +214,7 @@ async def prepare_turn_input(
             media_items=media_items,
             stream_id=chatter.stream_id,
             session=session,
+            config=config,
         )
 
         close_pending_tool_chain(response, reason="新消息到达")
@@ -417,6 +418,7 @@ async def _build_suppressed_batch_turn(
         media_items=media_items,
         stream_id=chatter.stream_id,
         session=session,
+        config=config,
     )
 
     close_pending_tool_chain(response, reason="抑制期消息合并到达")

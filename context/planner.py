@@ -63,6 +63,7 @@ class ContextPlanner:
         formatted_unreads: str,
         stream_id: str = "",
         session: Any = None,
+        config: Any | None = None,
     ) -> ContextPlan:
         """规划本轮用户输入和第三方上下文贡献。
 
@@ -96,8 +97,13 @@ class ContextPlanner:
             f"[新消息]\n{cleaned_unreads}"
             "\n\n---\n重申：你的响应必须仅包含工具调用（nfc_reply 或 do_nothing），不要在文本区域输出任何内容。"
         )
+        prompt_name = (
+            getattr(getattr(config, "flashback", None), "injection_point", "")
+            or "default_chatter_user_prompt"
+        )
+
         all_contributions = await collect_plugin_turn_contributions(
-            prompt_name="NFC_user_prompt",
+            prompt_name=prompt_name,
             content=user_text,
             stream_id=stream_id,
         )

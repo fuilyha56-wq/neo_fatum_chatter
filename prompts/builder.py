@@ -84,6 +84,7 @@ class NFCPromptBuilder:
         media_items: list[Any] | None = None,
         stream_id: str = "",
         session: Any = None,
+        config: Any | None = None,
     ) -> tuple[LLMPayload, LLMPayload | None]:
         """构建用户消息 Payload。
 
@@ -91,8 +92,10 @@ class NFCPromptBuilder:
         心理活动已在融合叙事时间线中展示，不再单独注入摘要。
         如果携带多模态图片，则打包为 Text + Image 混合内容。
 
-        触发 ``on_prompt_build`` 事件（模板名 ``nfc_user_prompt``），
-        允许外部插件（如 prompt_injector）向历史末尾追加额外的独立 USER payload。
+        触发 ``on_prompt_build`` 事件，注入点名由 ``config.flashback.injection_point``
+        决定（默认 ``default_chatter_user_prompt``，对齐 booku_memory 等主流注入器；
+        回退到 ``NFC_user_prompt`` 时需用户在 config.toml 显式配置）。
+        允许外部插件向历史末尾追加额外的独立 USER payload。
         注入内容不会拼入 user_text，而是作为单独的第二个 payload 返回，
         由调用方在发送前临时追加、发送后移除，从而不进入持久历史。
 
@@ -101,6 +104,7 @@ class NFCPromptBuilder:
             media_items: 多模态图片列表（可选，来自 extract_media_from_messages）
             stream_id: 当前聊天流 ID（供 on_prompt_build 事件处理器读取）
             session: 当前 NFCSession，用于读取 pending_proactive_context 等运行时字段
+            config: NFC 配置实例（用于读取注入点名）
 
         Returns:
             tuple: (user_payload, extra_payload | None)
@@ -111,6 +115,7 @@ class NFCPromptBuilder:
             formatted_unreads=formatted_unreads,
             stream_id=stream_id,
             session=session,
+            config=config,
         )
         return self._renderer.render_user_payload(plan, media_items=media_items)
 
