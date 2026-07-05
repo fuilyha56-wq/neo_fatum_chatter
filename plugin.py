@@ -34,7 +34,7 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.5.4"
+    plugin_version = "2.5.5"
     plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [NFCConfig]
@@ -334,6 +334,11 @@ class NFCPlugin(BasePlugin):
         config = self.config
         if not isinstance(config, NFCConfig):
             return
+
+        # 配置热重载后重新注册提示词模板，使 system_prompt_override 立即生效
+        from .prompts.modules import register_nfc_prompts
+
+        register_nfc_prompts()
 
         registry = get_global_registry()
         state_manager = get_global_state_manager()

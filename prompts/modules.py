@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import datetime
+import re
 
+from src.app.plugin_system.api.config_api import get_config
+from src.app.plugin_system.api.log_api import get_logger
 from src.core.config import get_core_config
 from src.core.prompt import get_prompt_manager, optional, wrap, min_len
 
@@ -17,6 +20,96 @@ from .templates import (
     NFC_PROACTIVE_DECISION_TOOL_CALLING,
     NFC_REPLY_MODE_TOOL_CALLING,
 )
+
+logger = get_logger("NFC_prompts")
+
+# NFC 系统提示词允许的全部占位名（与 register_nfc_prompts 中 policies 键一致）
+_NFC_SYSTEM_PROMPT_PLACEHOLDERS: frozenset[str] = frozenset({
+    "nickname", "alias_names",
+    "personality_core", "personality_side", "identity",
+    "personality_core_line", "personality_side_line", "identity_line",
+    "background_story", "reply_style",
+    "safety_guidelines", "negative_behaviors_section",
+    "reply_mode_instruction",
+    "platform", "chat_type", "bot_id", "stream_id",
+    "mental_log_hint", "theme_guide",
+    "custom_decision_prompt", "scene_state_info",
+    "current_time",
+    "segment_instruction", "wait_instruction",
+})
+
+# 必含的 6 大核心标签，保证提示词结构完整
+_NFC_REQUIRED_TAGS: tuple[str, ...] = (
+    "existence_logic", "personality", "behavioral_guidance",
+    "the_inner_voice", "tool_usage", "extra_context",
+)
+
+_TAG_PATTERN = re.compile(r"</?([a-zA-Z_][a-zA-Z0-9_]*)\s*>")
+_PLACEHOLDER_PATTERN = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def _validate_system_prompt_override(template: str) -> tuple[bool, str]:
+    """校验自定义系统提示词。
+
+    Returns:
+        (ok, reason): ok=True 时可使用；ok=False 时 reason 说明打回原因。
+    """
+    if not template or not template.strip():
+        return False, "空模板，使用默认"
+
+    # 1. XML 标签开闭配对（栈式匹配）
+    stack: list[str] = []
+    for match in _TAG_PATTERN.finditer(template):
+        tag = match.group(1)
+        full = match.group(0)
+        if full.startswith("</"):
+            if not stack or stack[-1] != tag:
+                return False, f"XML 标签未配对：闭合 </{tag}> 无对应开标签"
+            stack.pop()
+        else:
+            stack.append(tag)
+    if stack:
+        return False, f"XML 标签未配对：开标签 <{stack[-1]}> 未闭合"
+
+    # 2. 必含 6 大核心标签
+    for required in _NFC_REQUIRED_TAGS:
+        if f"<{required}>" not in template or f"</{required}>" not in template:
+            return False, f"缺少核心标签 <{required}>"
+
+    # 3. 所有 {占位} 必须在 NFC 可渲染占位集合内
+    for match in _PLACEHOLDER_PATTERN.finditer(template):
+        name = match.group(1)
+        if name not in _NFC_SYSTEM_PROMPT_PLACEHOLDERS:
+            return False, f"占位 {{{name}}} 无法被 NFC 渲染"
+
+    return True, ""
+
+
+def _resolve_system_prompt_template() -> str:
+    """读取 config 中的 system_prompt_override 并校验，失败回退默认模板。"""
+    nfc_config = get_config("neo_fatum_chatter")
+    override = ""
+    if nfc_config is not None:
+        override = getattr(
+            getattr(nfc_config, "prompt", None),
+            "system_prompt_override",
+            "",
+        ) or ""
+
+    if not override.strip():
+        return NFC_SYSTEM_PROMPT
+
+    # 与默认模板一致时静默走默认分支，不打 info 日志
+    if override == NFC_SYSTEM_PROMPT:
+        return NFC_SYSTEM_PROMPT
+
+    ok, reason = _validate_system_prompt_override(override)
+    if ok:
+        logger.info("NFC 系统提示词使用用户自定义模板")
+        return override
+
+    logger.warning(f"NFC 自定义系统提示词校验失败，回退默认：{reason}")
+    return NFC_SYSTEM_PROMPT
 
 
 def register_nfc_prompts() -> None:
@@ -29,10 +122,10 @@ def register_nfc_prompts() -> None:
 
     pm = get_prompt_manager()
 
-    # 主系统提示词
+    # 主系统提示词（支持 config.system_prompt_override 自定义，校验失败回退默认）
     pm.get_or_create(
         name="NFC_system_prompt",
-        template=NFC_SYSTEM_PROMPT,
+        template=_resolve_system_prompt_template(),
         policies={
             "nickname": optional(personality.nickname),
             "alias_names": optional("、".join(personality.alias_names)),

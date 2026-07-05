@@ -12,6 +12,8 @@ from pydantic import field_validator, model_validator
 
 from src.app.plugin_system.base import BaseConfig, Field, SectionBase, config_section
 
+from .prompts.templates import NFC_SYSTEM_PROMPT
+
 
 class NFCConfig(BaseConfig):
     """NeoFatumChatter 配置。"""
@@ -349,6 +351,31 @@ class NFCConfig(BaseConfig):
         min_compress_interval_minutes: float = Field(
             default=120.0,
             description="两次压缩之间的最短间隔（分钟），防止频繁触发",
+        )
+        system_prompt_override: str = Field(
+            default=NFC_SYSTEM_PROMPT,
+            description=(
+                "系统提示词模板。\n"
+                "\n"
+                "默认已填入 NFC 标准模板，可直接在此修改并保存。\n"
+                "\n"
+                "标准模板源码位置：prompts/templates.py 中的 NFC_SYSTEM_PROMPT。\n"
+                "\n"
+                "若修改后想恢复原状，请删掉本行（整行 system_prompt_override 配置），\n"
+                "下次启动框架会自动用标准模板重新填回。\n"
+                "\n"
+                "保存时会校验：\n"
+                "- 所有 XML 标签开闭配对；\n"
+                "- 所有 {占位} 必须是 NFC 可渲染的占位名；\n"
+                "- 必须包含 6 大核心标签：<existence_logic>、<personality>、"
+                "<behavioral_guidance>、<the_inner_voice>、<tool_usage>、<extra_context>。\n"
+                "任一不满足则打回标准模板并在日志记录。"
+            ),
+            label="系统提示词自定义",
+            input_type="textarea",
+            rows=24,
+            placeholder="默认已填入标准模板，可直接修改",
+            tag="prompt",
         )
 
 
