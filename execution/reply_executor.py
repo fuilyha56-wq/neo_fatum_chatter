@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import random
 import re
@@ -129,6 +130,130 @@ def sanitize_segment(segment: str) -> tuple[str, bool, bool]:
     return cleaned, stripped_thinking, stripped_metadata
 
 
+
+
+def _resolve_streaming_service(signature: str = "") -> Any | None:
+    """按配置签名或能力发现支持 ``start_streaming`` 的 Service。"""
+    try:
+        from src.app.plugin_system.api.service_api import get_all_services, get_service
+
+        if signature:
+            service = get_service(signature)
+            if service is not None and callable(getattr(service, "start_streaming", None)):
+                return service
+            logger.warning(f"指定流式 Service 不可用或不支持 start_streaming: {signature}")
+            return None
+
+        for candidate_signature, service_cls in get_all_services().items():
+            if not callable(getattr(service_cls, "start_streaming", None)):
+                continue
+            service = get_service(candidate_signature)
+            if service is not None and callable(getattr(service, "start_streaming", None)):
+                return service
+    except Exception:
+        logger.debug("流式 Service 发现失败", exc_info=True)
+    return None
+
+
+def extract_streaming_context(trigger_msg: Any | None) -> dict[str, str] | None:
+    """从触发消息提取 QQBot C2C 流式发送上下文。"""
+    if trigger_msg is None:
+        return None
+
+    platform = str(getattr(trigger_msg, "platform", "") or "").lower()
+    if platform != "qqbot":
+        return None
+
+    chat_type = str(getattr(trigger_msg, "chat_type", "") or "").lower()
+    if chat_type == "group":
+        return None
+
+    extra = getattr(trigger_msg, "extra", None)
+    if not isinstance(extra, dict):
+        extra = {}
+
+    user_openid = str(
+        extra.get("qq_user_openid") or getattr(trigger_msg, "sender_id", "") or ""
+    )
+    if not user_openid:
+        return None
+
+    event_id = str(extra.get("qq_event_id") or "")
+    msg_id = event_id or str(getattr(trigger_msg, "message_id", "") or "")
+    return {
+        "user_openid": user_openid,
+        "event_id": event_id,
+        "msg_id": msg_id,
+    }
+
+
+async def _maybe_call(value: Any) -> Any:
+    """兼容同步/异步测试替身与真实异步 controller 方法。"""
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _send_streaming_segment(
+    segment: str,
+    *,
+    trigger_msg: Any | None,
+    streaming_chunk_size: int,
+    streaming_interval: float,
+    sleeper: Callable[[float], Awaitable[None]],
+    streaming_service_getter: Callable[[str], Any | None] | None,
+    streaming_service_signature: str,
+) -> bool:
+    """尝试使用外部流式 Service 发送单段文本。"""
+    context = extract_streaming_context(trigger_msg)
+    if context is None:
+        return False
+
+    service_getter = streaming_service_getter or _resolve_streaming_service
+    service = service_getter(streaming_service_signature)
+    if service is None:
+        logger.debug("未发现可用流式 Service，降级普通发送")
+        return False
+
+    chunk_size = max(1, int(streaming_chunk_size))
+    interval = max(0.0, float(streaming_interval))
+    initial_text = segment[:chunk_size]
+
+    try:
+        result = await service.start_streaming(
+            user_openid=context["user_openid"],
+            initial_text=initial_text,
+            event_id=context["event_id"],
+            msg_id=context["msg_id"],
+        )
+    except Exception:
+        logger.warning("调用流式 Service 启动失败，降级普通发送", exc_info=True)
+        return False
+
+    if not isinstance(result, dict) or not result.get("success"):
+        logger.debug(f"流式 Service 未启动，降级普通发送: {result}")
+        return False
+
+    controller = result.get("controller")
+    if controller is None:
+        logger.debug("流式 Service 未返回 controller，降级普通发送")
+        return False
+
+    try:
+        for end in range(chunk_size * 2, len(segment) + chunk_size, chunk_size):
+            current_text = segment[:min(end, len(segment))]
+            if current_text == initial_text:
+                continue
+            if interval > 0:
+                await sleeper(interval)
+            await _maybe_call(controller.update(current_text))
+        await _maybe_call(controller.end(segment))
+        return True
+    except Exception:
+        logger.warning("流式发送更新失败，降级普通发送", exc_info=True)
+        return False
+
+
 async def _send_reply_to_stream(text: str, stream_id: str, reply_to: str) -> bool:
     """发送引用回复文本。"""
     return await send_text(content=text, stream_id=stream_id, reply_to=reply_to)
@@ -145,6 +270,12 @@ async def send_reply_segments(
     sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
     yield_point: Callable[[], Awaitable[None]] | None = None,
     send_reply_to_segment: Callable[[str, str, str], Awaitable[bool]] | None = None,
+    streaming_enabled: bool = False,
+    streaming_service_signature: str = "",
+    streaming_chunk_size: int = 10,
+    streaming_interval: float = 0.1,
+    trigger_msg: Any | None = None,
+    streaming_service_getter: Callable[[str], Any | None] | None = None,
 ) -> tuple[list[str], bool]:
     """串行发送已经清洗过的段落。
 
@@ -179,6 +310,18 @@ async def send_reply_segments(
         if reply_to and index == 0:
             reply_sender = send_reply_to_segment or _send_reply_to_stream
             success = await reply_sender(segment, stream_id, reply_to)
+        elif streaming_enabled:
+            success = await _send_streaming_segment(
+                segment,
+                trigger_msg=trigger_msg,
+                streaming_chunk_size=streaming_chunk_size,
+                streaming_interval=streaming_interval,
+                sleeper=sleeper,
+                streaming_service_getter=streaming_service_getter,
+                streaming_service_signature=streaming_service_signature,
+            )
+            if not success:
+                success = await send_segment(segment)
         else:
             success = await send_segment(segment)
 

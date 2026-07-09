@@ -291,6 +291,13 @@ class NFCConfig(BaseConfig):
                 "模拟真人边打字边发送的体验。需要平台适配器支持编辑消息。"
             ),
         )
+        streaming_service_signature: str = Field(
+            default="",
+            description=(
+                "流式回复 Service 签名。"
+                "留空时自动发现支持 start_streaming 的 Service。"
+            ),
+        )
         streaming_chunk_size: int = Field(
             default=10,
             description="流式回复每次追加的字符数",
