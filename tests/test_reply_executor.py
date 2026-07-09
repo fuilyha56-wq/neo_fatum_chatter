@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+from types import SimpleNamespace
+
 import pytest
 
 from neo_fatum_chatter.execution.reply_executor import (
@@ -154,3 +156,261 @@ async def test_send_reply_segments_empty_input():
     )
     assert ok is True
     assert sent == []
+
+
+class FakeStreamingController:
+    def __init__(self, *, fail_update: bool = False) -> None:
+        self.fail_update = fail_update
+        self.updates = []
+        self.ended_with = None
+
+    async def update(self, text: str) -> None:
+        self.updates.append(text)
+        if self.fail_update:
+            raise RuntimeError("update failed")
+
+    async def end(self, text: str) -> None:
+        self.ended_with = text
+
+
+class FakeStreamingService:
+    def __init__(self, *, success: bool = True, fail_update: bool = False) -> None:
+        self.success = success
+        self.controller = FakeStreamingController(fail_update=fail_update)
+        self.calls = []
+
+    async def start_streaming(
+        self,
+        *,
+        user_openid: str,
+        initial_text: str,
+        event_id: str = "",
+        msg_id: str = "",
+    ):
+        self.calls.append((user_openid, initial_text, event_id, msg_id))
+        if not self.success:
+            return {"success": False, "controller": None, "error": "boom"}
+        return {"success": True, "controller": self.controller, "error": None}
+
+
+def qqbot_trigger_msg():
+    return SimpleNamespace(
+        platform="qqbot",
+        chat_type="private",
+        sender_id="fallback-openid",
+        message_id="message-id",
+        extra={"qq_user_openid": "user-openid", "qq_event_id": "event-id"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_success_uses_service():
+    service = FakeStreamingService()
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    async def fast_sleeper(_seconds: float) -> None:
+        return None
+
+    sent, ok = await send_reply_segments(
+        ["abcdef"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        sleeper=fast_sleeper,
+        streaming_enabled=True,
+        streaming_chunk_size=2,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["abcdef"]
+    assert ordinary_sent == []
+    assert service.calls == [("user-openid", "ab", "event-id", "event-id")]
+    assert service.controller.updates == ["abcd", "abcdef"]
+    assert service.controller.ended_with == "abcdef"
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_non_qqbot_falls_back():
+    service = FakeStreamingService()
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["hello"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        trigger_msg=SimpleNamespace(platform="onebot", chat_type="private", extra={}),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["hello"]
+    assert ordinary_sent == ["hello"]
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_start_failure_falls_back():
+    service = FakeStreamingService(success=False)
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["hello"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        trigger_msg=qqbot_trigger_msg(),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["hello"]
+    assert ordinary_sent == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_reply_to_skips_streaming():
+    service = FakeStreamingService()
+    calls = []
+
+    async def send_segment(text: str) -> bool:
+        raise AssertionError(f"普通发送不应处理引用首段: {text}")
+
+    async def send_reply_to_segment(text: str, stream_id: str, reply_to: str) -> bool:
+        calls.append((text, stream_id, reply_to))
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["hello"],
+        stream_id="abcdef12",
+        reply_to="m1",
+        send_segment=send_segment,
+        send_reply_to_segment=send_reply_to_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        trigger_msg=qqbot_trigger_msg(),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["hello"]
+    assert calls == [("hello", "abcdef12", "m1")]
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_normalizes_chunk_and_interval():
+    service = FakeStreamingService()
+
+    async def send_segment(text: str) -> bool:
+        raise AssertionError(f"不应降级普通发送: {text}")
+
+    async def fast_sleeper(_seconds: float) -> None:
+        raise AssertionError("负 interval 应规整为 0，不应 sleep")
+
+    sent, ok = await send_reply_segments(
+        ["abc"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        sleeper=fast_sleeper,
+        streaming_enabled=True,
+        streaming_chunk_size=0,
+        streaming_interval=-1.0,
+        trigger_msg=qqbot_trigger_msg(),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["abc"]
+    assert service.calls == [("user-openid", "a", "event-id", "event-id")]
+    assert service.controller.updates == ["ab", "abc"]
+    assert service.controller.ended_with == "abc"
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_passes_configured_service_signature():
+    service = FakeStreamingService()
+    signatures = []
+
+    async def send_segment(text: str) -> bool:
+        raise AssertionError(f"不应降级普通发送: {text}")
+
+    def get_service(signature: str):
+        signatures.append(signature)
+        return service
+
+    sent, ok = await send_reply_segments(
+        ["abcd"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        streaming_service_signature="custom_plugin:service:streamer",
+        streaming_chunk_size=2,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(),
+        streaming_service_getter=get_service,
+    )
+
+    assert ok is True
+    assert sent == ["abcd"]
+    assert signatures == ["custom_plugin:service:streamer"]
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_update_failure_ends_stream():
+    service = FakeStreamingService(fail_update=True)
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["abcdef"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        streaming_chunk_size=2,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["abcdef"]
+    assert ordinary_sent == []
+    assert service.controller.updates == ["abcd"]
+    assert service.controller.ended_with == "abcdef"

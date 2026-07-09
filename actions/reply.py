@@ -80,6 +80,10 @@ class NFCReplyAction(BaseAction):
         # 段间延迟从 plugin 配置读取，沿用旧路径以避免产生新的依赖入口。
         segment_delay_min = 0.5
         segment_delay_max = 2.0
+        streaming_enabled = False
+        streaming_service_signature = ""
+        streaming_chunk_size = 10
+        streaming_interval = 0.1
         try:
             from src.app.plugin_system.api.config_api import get_config
             nfc_config = get_config("neo_fatum_chatter")
@@ -87,6 +91,12 @@ class NFCReplyAction(BaseAction):
                 reply_section = getattr(nfc_config, "reply", None)
                 segment_delay_min = float(getattr(reply_section, "segment_delay_min", 0.5))
                 segment_delay_max = float(getattr(reply_section, "segment_delay_max", 2.0))
+                streaming_enabled = bool(getattr(reply_section, "streaming_enabled", False))
+                streaming_service_signature = str(
+                    getattr(reply_section, "streaming_service_signature", "") or ""
+                ).strip()
+                streaming_chunk_size = int(getattr(reply_section, "streaming_chunk_size", 10))
+                streaming_interval = float(getattr(reply_section, "streaming_interval", 0.1))
         except Exception:
             pass
 
@@ -95,6 +105,7 @@ class NFCReplyAction(BaseAction):
             await asyncio.sleep(0)
 
         yield None
+        trigger_msg = self._get_context_message_for_target(reply_to or None)
         sent, ok = await send_reply_segments(
             cleaned_segments,
             stream_id=self.chat_stream.stream_id,
@@ -103,6 +114,11 @@ class NFCReplyAction(BaseAction):
             segment_delay_min=segment_delay_min,
             segment_delay_max=segment_delay_max,
             yield_point=_yield_point,
+            streaming_enabled=streaming_enabled,
+            streaming_service_signature=streaming_service_signature,
+            streaming_chunk_size=streaming_chunk_size,
+            streaming_interval=streaming_interval,
+            trigger_msg=trigger_msg,
         )
 
         if not ok:
