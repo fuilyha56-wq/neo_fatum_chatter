@@ -159,21 +159,24 @@ async def test_send_reply_segments_empty_input():
 
 
 class FakeStreamingController:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_update: bool = False) -> None:
+        self.fail_update = fail_update
         self.updates = []
         self.ended_with = None
 
     async def update(self, text: str) -> None:
         self.updates.append(text)
+        if self.fail_update:
+            raise RuntimeError("update failed")
 
     async def end(self, text: str) -> None:
         self.ended_with = text
 
 
 class FakeStreamingService:
-    def __init__(self, *, success: bool = True) -> None:
+    def __init__(self, *, success: bool = True, fail_update: bool = False) -> None:
         self.success = success
-        self.controller = FakeStreamingController()
+        self.controller = FakeStreamingController(fail_update=fail_update)
         self.calls = []
 
     async def start_streaming(
@@ -381,3 +384,33 @@ async def test_send_reply_segments_passes_configured_service_signature():
     assert ok is True
     assert sent == ["abcd"]
     assert signatures == ["custom_plugin:service:streamer"]
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_update_failure_ends_stream():
+    service = FakeStreamingService(fail_update=True)
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["abcdef"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        streaming_chunk_size=2,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["abcdef"]
+    assert ordinary_sent == []
+    assert service.controller.updates == ["abcd"]
+    assert service.controller.ended_with == "abcdef"

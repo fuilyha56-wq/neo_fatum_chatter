@@ -250,8 +250,13 @@ async def _send_streaming_segment(
         await _maybe_call(controller.end(segment))
         return True
     except Exception:
-        logger.warning("流式发送更新失败，降级普通发送", exc_info=True)
-        return False
+        logger.warning("流式发送更新失败，尝试结束流式消息", exc_info=True)
+        try:
+            await _maybe_call(controller.end(segment))
+            return True
+        except Exception:
+            logger.warning("流式消息结束失败，降级普通发送", exc_info=True)
+            return False
 
 
 async def _send_reply_to_stream(text: str, stream_id: str, reply_to: str) -> bool:
