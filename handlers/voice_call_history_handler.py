@@ -44,8 +44,8 @@ _NFC_SIGNATURE = "neo_fatum_chatter:chatter:neo_fatum_chatter"
 class VoiceCallHistoryHandler(BaseEventHandler):
     """订阅 ``voice_call.ended``，把通话历史打包成一对摘要补回 NFC session。"""
 
-    handler_name: str = "nfc_voice_call_history_handler"
-    handler_description: str = (
+    name: str = "nfc_voice_call_history_handler"
+    description: str = (
         "通话结束后把 anima_chatter 在 NFC 流上记录的整段对话打包成一对 "
         "user/assistant 摘要补回 session.chain_payloads，保证挂断后上下文连贯，"
         "且不会用一通通话挤占多个 chain 槽位。"

@@ -365,7 +365,7 @@ class NFCPlugin(BasePlugin):
         affected_streams = [
             stream_id
             for stream_id, chatter in active_chatters.items()
-            if getattr(chatter, "chatter_name", "") == "neo_fatum_chatter"
+            if getattr(chatter, "name", "") == "neo_fatum_chatter"
         ]
         if not affected_streams:
             return

@@ -29,9 +29,9 @@ NFC 的对外接口分为五类：**组件入口**（Chatter / Action / EventHan
 
 ### 1.2 Action（LLM 工具）
 
-均为 `BaseAction` 子类，工具名（`action_name`）即 LLM 调用名。
+均为 `BaseAction` 子类，工具名（`name`）即 LLM 调用名。
 
-| 类 | action_name | 入口 | 主要参数 |
+| 类 | name | 入口 | 主要参数 |
 |---|---|---|---|
 | `NFCReplyAction` | `nfc_reply` | `actions/reply.py:25` | `content` `thought` `expected_reaction` `max_wait_seconds` `mood` `reply_to` |
 | `DoNothingAction` | `do_nothing` | `actions/do_nothing.py:17` | `thought` `max_wait_seconds` |
@@ -44,7 +44,7 @@ NFC 的对外接口分为五类：**组件入口**（Chatter / Action / EventHan
 
 ### 1.3 EventHandler
 
-| 类 | handler_name | 入口 | 订阅事件 |
+| 类 | name | 入口 | 订阅事件 |
 |---|---|---|---|
 | `ProactiveHandler` | `nfc_proactive_handler` | `handlers/proactive_handler.py:27` | `NFC.proactive_trigger` |
 | `VoiceCallHistoryHandler` | `nfc_voice_call_history_handler` | `handlers/voice_call_history_handler.py:44` | `voice_call.ended` |

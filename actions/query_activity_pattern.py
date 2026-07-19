@@ -29,8 +29,8 @@ def _format_hourly_bar(count: int, max_count: int, bar_width: int = 10) -> str:
 class QueryActivityPatternAction(BaseAction):
     """查询用户消息活跃分布。"""
 
-    action_name = "nfc_query_activity_pattern"
-    action_description = (
+    name = "nfc_query_activity_pattern"
+    description = (
         "查询对方的消息活跃时段分布。从数据库统计对方在最近一段时间内"
         "每小时的消息数量，了解对方的作息和出没时间。"
         "数据越久越稳定，建议至少回溯 30 天。"

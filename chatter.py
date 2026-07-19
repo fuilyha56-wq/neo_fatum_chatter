@@ -58,8 +58,8 @@ class NeoFatumChatter(BaseChatter):
     - 活动流为持久化审计日志，LLM 上下文通过 response 链自动积累
     """
 
-    chatter_name: str = "neo_fatum_chatter"
-    chatter_description: str = (
+    name: str = "neo_fatum_chatter"
+    description: str = (
         "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     )
 

@@ -32,8 +32,8 @@ class ProactiveHandler(BaseEventHandler):
     向目标流注入一条系统触发消息并唤醒流循环。
     """
 
-    handler_name: str = "nfc_proactive_handler"
-    handler_description: str = "响应主动发起事件，唤醒目标聊天流"
+    name: str = "nfc_proactive_handler"
+    description: str = "响应主动发起事件，唤醒目标聊天流"
     weight: int = 0
     intercept_message: bool = False
     init_subscribe: list[EventType | str] = [_PROACTIVE_EVENT]

@@ -27,8 +27,8 @@ def _format_time_ago(ts: float, now: float) -> str:
 class QueryHabitsAction(BaseAction):
     """查询已记录的用户习惯观察。"""
 
-    action_name = "nfc_query_habits"
-    action_description = (
+    name = "nfc_query_habits"
+    description = (
         "查询之前记录的关于对方习惯的观察。可按分类过滤。"
         "如果没有记录过，会提示无数据。"
     )
