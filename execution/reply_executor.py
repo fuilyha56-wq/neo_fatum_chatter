@@ -178,8 +178,14 @@ def extract_streaming_context(trigger_msg: Any | None) -> dict[str, str] | None:
     if not user_openid:
         return None
 
-    event_id = str(extra.get("qq_event_id") or "")
-    msg_id = event_id or str(getattr(trigger_msg, "message_id", "") or "")
+    event_type = str(extra.get("qq_event_type") or "").upper()
+    event_id = ""
+    msg_id = ""
+    if event_type == "C2C_MESSAGE_CREATE":
+        msg_id = str(getattr(trigger_msg, "message_id", "") or "")
+    elif event_type == "INTERACTION_CREATE":
+        event_id = str(extra.get("qq_event_id") or "")
+
     return {
         "user_openid": user_openid,
         "event_id": event_id,
