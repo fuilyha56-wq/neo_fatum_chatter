@@ -188,19 +188,31 @@ class FakeStreamingService:
         msg_id: str = "",
     ):
         self.calls.append((user_openid, initial_text, event_id, msg_id))
+        if event_id and msg_id:
+            return {
+                "success": False,
+                "controller": None,
+                "error": "event_id 和 msg_id 不能同时提供",
+            }
         if not self.success:
             return {"success": False, "controller": None, "error": "boom"}
         return {"success": True, "controller": self.controller, "error": None}
 
 
-def qqbot_trigger_msg():
-    return SimpleNamespace(
-        platform="qqbot",
-        chat_type="private",
-        sender_id="fallback-openid",
-        message_id="message-id",
-        extra={"qq_user_openid": "user-openid", "qq_event_id": "event-id"},
-    )
+def qqbot_trigger_msg(**overrides):
+    values = {
+        "platform": "qqbot",
+        "chat_type": "private",
+        "sender_id": "fallback-openid",
+        "message_id": "message-id",
+        "extra": {
+            "qq_user_openid": "user-openid",
+            "qq_event_id": "event-id",
+            "qq_event_type": "C2C_MESSAGE_CREATE",
+        },
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
 @pytest.mark.asyncio
@@ -233,9 +245,96 @@ async def test_send_reply_segments_streaming_success_uses_service():
     assert ok is True
     assert sent == ["abcdef"]
     assert ordinary_sent == []
-    assert service.calls == [("user-openid", "ab", "event-id", "event-id")]
+    assert service.calls == [("user-openid", "ab", "", "message-id")]
     assert service.controller.updates == ["abcd", "abcdef"]
     assert service.controller.ended_with == "abcdef"
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_c2c_without_message_id_is_unreferenced():
+    service = FakeStreamingService()
+
+    async def send_segment(text: str) -> bool:
+        raise AssertionError(f"不应降级普通发送: {text}")
+
+    sent, ok = await send_reply_segments(
+        ["abc"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        streaming_chunk_size=1,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(message_id=""),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["abc"]
+    assert service.calls == [("user-openid", "a", "", "")]
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_interaction_uses_only_event_id():
+    """验证 NFC 的 Interaction 输入契约，不代表当前 adapter 到 NFC 的事件链路。"""
+    service = FakeStreamingService()
+
+    async def send_segment(text: str) -> bool:
+        raise AssertionError(f"不应降级普通发送: {text}")
+
+    sent, ok = await send_reply_segments(
+        ["abc"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        streaming_chunk_size=1,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(
+            extra={
+                "qq_user_openid": "user-openid",
+                "qq_event_id": "interaction-id",
+                "qq_event_type": "INTERACTION_CREATE",
+            }
+        ),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["abc"]
+    assert service.calls == [("user-openid", "a", "interaction-id", "")]
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_unknown_event_is_unreferenced():
+    service = FakeStreamingService()
+
+    async def send_segment(text: str) -> bool:
+        raise AssertionError(f"不应降级普通发送: {text}")
+
+    sent, ok = await send_reply_segments(
+        ["abc"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        streaming_chunk_size=1,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(
+            extra={"qq_user_openid": "user-openid", "qq_event_type": "UNKNOWN"}
+        ),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["abc"]
+    assert service.calls == [("user-openid", "a", "", "")]
 
 
 @pytest.mark.asyncio
@@ -263,6 +362,96 @@ async def test_send_reply_segments_streaming_non_qqbot_falls_back():
     assert sent == ["hello"]
     assert ordinary_sent == ["hello"]
     assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_group_falls_back():
+    service = FakeStreamingService()
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["hello"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        trigger_msg=qqbot_trigger_msg(chat_type="group"),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["hello"]
+    assert ordinary_sent == ["hello"]
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_without_user_openid_falls_back():
+    service = FakeStreamingService()
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["hello"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        trigger_msg=qqbot_trigger_msg(
+            sender_id="",
+            extra={"qq_event_type": "C2C_MESSAGE_CREATE"},
+        ),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["hello"]
+    assert ordinary_sent == ["hello"]
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_reply_to_first_segment_then_streams_following():
+    service = FakeStreamingService()
+    reply_calls = []
+
+    async def send_segment(text: str) -> bool:
+        raise AssertionError(f"普通发送不应处理: {text}")
+
+    async def send_reply_to_segment(text: str, stream_id: str, reply_to: str) -> bool:
+        reply_calls.append((text, stream_id, reply_to))
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["首段", "后续段"],
+        stream_id="abcdef12",
+        reply_to="m1",
+        send_segment=send_segment,
+        send_reply_to_segment=send_reply_to_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        streaming_chunk_size=1,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["首段", "后续段"]
+    assert reply_calls == [("首段", "abcdef12", "m1")]
+    assert service.calls == [("user-openid", "后", "", "message-id")]
 
 
 @pytest.mark.asyncio
@@ -349,7 +538,7 @@ async def test_send_reply_segments_streaming_normalizes_chunk_and_interval():
 
     assert ok is True
     assert sent == ["abc"]
-    assert service.calls == [("user-openid", "a", "event-id", "event-id")]
+    assert service.calls == [("user-openid", "a", "", "message-id")]
     assert service.controller.updates == ["ab", "abc"]
     assert service.controller.ended_with == "abc"
 
