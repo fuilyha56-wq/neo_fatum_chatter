@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from neo_fatum_chatter.actions import reply as reply_action_module
+from neo_fatum_chatter.actions.reply import NFCReplyAction, bind_reply_trigger
 from neo_fatum_chatter.execution.reply_executor import (
     coerce_content_segments,
     sanitize_segment,
@@ -201,7 +203,7 @@ class FakeStreamingService:
 
 def qqbot_trigger_msg(**overrides):
     values = {
-        "platform": "qqbot",
+        "platform": "qq",
         "chat_type": "private",
         "sender_id": "fallback-openid",
         "message_id": "message-id",
@@ -310,7 +312,7 @@ async def test_send_reply_segments_streaming_interaction_uses_only_event_id():
 
 
 @pytest.mark.asyncio
-async def test_send_reply_segments_streaming_unknown_event_is_unreferenced():
+async def test_send_reply_segments_streaming_unknown_event_uses_message_id():
     service = FakeStreamingService()
 
     async def send_segment(text: str) -> bool:
@@ -334,7 +336,91 @@ async def test_send_reply_segments_streaming_unknown_event_is_unreferenced():
 
     assert ok is True
     assert sent == ["abc"]
-    assert service.calls == [("user-openid", "a", "", "")]
+    assert service.calls == [("user-openid", "a", "", "message-id")]
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_without_metadata_uses_message_id():
+    service = FakeStreamingService()
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["abc"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        streaming_chunk_size=1,
+        streaming_interval=0.0,
+        trigger_msg=qqbot_trigger_msg(
+            sender_id="production-openid",
+            message_id="production-message-id",
+            extra={},
+        ),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["abc"]
+    assert ordinary_sent == []
+    assert service.calls == [
+        ("production-openid", "a", "", "production-message-id")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reply_action_uses_bound_trigger_after_yield(monkeypatch):
+    trigger_msg = qqbot_trigger_msg(extra={})
+    history_msg = qqbot_trigger_msg(
+        sender_id="bot-id",
+        message_id="historical-bot-message",
+        extra={},
+    )
+    captured = {}
+
+    async def fake_send_reply_segments(segments, **kwargs):
+        captured["segments"] = segments
+        captured["trigger_msg"] = kwargs["trigger_msg"]
+        return segments, True
+
+    monkeypatch.setattr(
+        reply_action_module,
+        "send_reply_segments",
+        fake_send_reply_segments,
+    )
+    monkeypatch.setattr(
+        "src.app.plugin_system.api.config_api.get_config",
+        lambda _plugin_name: None,
+    )
+
+    context = SimpleNamespace(
+        unread_messages=[],
+        history_messages=[history_msg],
+        current_message=history_msg,
+        message_cache=[],
+    )
+    chat_stream = SimpleNamespace(
+        stream_id="abcdef12",
+        platform="qq",
+        chat_type="private",
+        context=context,
+    )
+    action = NFCReplyAction(chat_stream, SimpleNamespace())
+
+    with bind_reply_trigger(trigger_msg):
+        execution = action.execute(content="hello")
+        assert await anext(execution) is None
+        assert await anext(execution) == (True, "已发送 1 条消息")
+
+    assert captured["segments"] == ["hello"]
+    assert captured["trigger_msg"] is trigger_msg
+    assert captured["trigger_msg"] is not history_msg
 
 
 @pytest.mark.asyncio
@@ -355,6 +441,33 @@ async def test_send_reply_segments_streaming_non_qqbot_falls_back():
         segment_delay_max=0.0,
         streaming_enabled=True,
         trigger_msg=SimpleNamespace(platform="onebot", chat_type="private", extra={}),
+        streaming_service_getter=lambda _signature: service,
+    )
+
+    assert ok is True
+    assert sent == ["hello"]
+    assert ordinary_sent == ["hello"]
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_reply_segments_streaming_legacy_qqbot_platform_falls_back():
+    service = FakeStreamingService()
+    ordinary_sent = []
+
+    async def send_segment(text: str) -> bool:
+        ordinary_sent.append(text)
+        return True
+
+    sent, ok = await send_reply_segments(
+        ["hello"],
+        stream_id="abcdef12",
+        reply_to="",
+        send_segment=send_segment,
+        segment_delay_min=0.0,
+        segment_delay_max=0.0,
+        streaming_enabled=True,
+        trigger_msg=qqbot_trigger_msg(platform="qqbot"),
         streaming_service_getter=lambda _signature: service,
     )
 

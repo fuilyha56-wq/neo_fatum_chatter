@@ -12,7 +12,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from src.app.plugin_system.api.llm_api import (
@@ -37,8 +39,9 @@ from .protocol.response_normalizer import normalize_response
 from .models import NFC_REPLY, DO_NOTHING
 
 if TYPE_CHECKING:
-    from src.core.models.stream import ChatStream
     from src.app.plugin_system.api.llm_api import ToolRegistry
+    from src.core.models.message import Message
+    from src.core.models.stream import ChatStream
 
     from .config import NFCConfig
     from .multimodal import ImageBudget
@@ -357,6 +360,26 @@ class NeoFatumChatter(BaseChatter):
 
     # ── 动作执行 ────────────────────────────────────────────
 
+    async def run_tool_call(
+        self,
+        calls: Any,
+        response: Any,
+        usable_map: "ToolRegistry",
+        trigger_msg: "Message | None",
+        task_observer: Callable[[asyncio.Task[None]], None] | None = None,
+    ) -> list[tuple[bool, bool]]:
+        """执行工具调用，并在执行期间绑定本轮触发消息。"""
+        from .actions.reply import bind_reply_trigger
+
+        with bind_reply_trigger(trigger_msg):
+            return await super().run_tool_call(
+                calls,
+                response,
+                usable_map,
+                trigger_msg,
+                task_observer,
+            )
+
     async def _execute_reply(
         self,
         content: str,
@@ -384,10 +407,13 @@ class NeoFatumChatter(BaseChatter):
                 return False
 
         try:
+            from .actions.reply import bind_reply_trigger
+
             kwargs: dict[str, Any] = {"content": content}
             if reply_to:
                 kwargs["reply_to"] = reply_to
-            await self.exec_llm_usable(NFCReplyAction, trigger_msg, **kwargs)
+            with bind_reply_trigger(trigger_msg):
+                await self.exec_llm_usable(NFCReplyAction, trigger_msg, **kwargs)
             return True
         except Exception as e:
             logger.error(f"通过框架执行 NFCReplyAction 失败: {e}", exc_info=True)
