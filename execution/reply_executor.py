@@ -156,7 +156,15 @@ def _resolve_streaming_service(signature: str = "") -> Any | None:
 
 
 def extract_streaming_context(trigger_msg: Any | None) -> dict[str, str] | None:
-    """从触发消息提取 QQBot C2C 流式发送上下文。"""
+    """从触发消息提取 QQBot C2C 流式发送上下文。
+
+    按 QQ API 字段语义互斥构造引用参数，避免 ``event_id`` 与 ``msg_id``
+    同时非空被 ``QQBotService.start_streaming()`` 拒绝：
+
+    - ``C2C_MESSAGE_CREATE``：仅填充 ``msg_id``（引用用户消息）
+    - ``INTERACTION_CREATE``：仅填充 ``event_id``（引用交互事件）
+    - 主动发送或未知事件类型：两者均留空（不引用）
+    """
     if trigger_msg is None:
         return None
 

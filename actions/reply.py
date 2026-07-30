@@ -47,8 +47,8 @@ def get_bound_reply_trigger() -> Any | None:
 class NFCReplyAction(BaseAction):
     """发送文本消息给对方。"""
 
-    name = "nfc_reply"
-    description = (
+    action_name = "nfc_reply"
+    action_description = (
         "发送文本消息给对方。"
         "content 为消息段落列表，每个元素是一条独立消息，系统会依次发出。"
         "可选的 reply_to 参数允许你引用消息（虽然私聊中较少用到，但引用旧消息时可能有用）。"
