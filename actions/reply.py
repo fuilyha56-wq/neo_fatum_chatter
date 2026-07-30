@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Annotated, Any, Iterator
 
 from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.base import BaseAction
@@ -20,6 +22,26 @@ from ..execution.reply_executor import (
 )
 
 logger = get_logger("NFC_reply")
+
+_reply_trigger: ContextVar[Any | None] = ContextVar(
+    "nfc_reply_trigger",
+    default=None,
+)
+
+
+@contextmanager
+def bind_reply_trigger(trigger_msg: Any | None) -> Iterator[None]:
+    """在当前异步执行链中绑定 NFC 回复的触发消息。"""
+    token = _reply_trigger.set(trigger_msg)
+    try:
+        yield
+    finally:
+        _reply_trigger.reset(token)
+
+
+def get_bound_reply_trigger() -> Any | None:
+    """获取当前异步执行链绑定的 NFC 回复触发消息。"""
+    return _reply_trigger.get()
 
 
 class NFCReplyAction(BaseAction):
@@ -105,7 +127,7 @@ class NFCReplyAction(BaseAction):
             await asyncio.sleep(0)
 
         yield None
-        trigger_msg = self._get_context_message_for_target(reply_to or None)
+        trigger_msg = get_bound_reply_trigger()
         sent, ok = await send_reply_segments(
             cleaned_segments,
             stream_id=self.chat_stream.stream_id,

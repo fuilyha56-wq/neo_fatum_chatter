@@ -169,7 +169,7 @@ def extract_streaming_context(trigger_msg: Any | None) -> dict[str, str] | None:
         return None
 
     platform = str(getattr(trigger_msg, "platform", "") or "").lower()
-    if platform != "qqbot":
+    if platform != "qq":
         return None
 
     chat_type = str(getattr(trigger_msg, "chat_type", "") or "").lower()
@@ -189,10 +189,10 @@ def extract_streaming_context(trigger_msg: Any | None) -> dict[str, str] | None:
     event_type = str(extra.get("qq_event_type") or "").upper()
     event_id = ""
     msg_id = ""
-    if event_type == "C2C_MESSAGE_CREATE":
-        msg_id = str(getattr(trigger_msg, "message_id", "") or "")
-    elif event_type == "INTERACTION_CREATE":
+    if event_type == "INTERACTION_CREATE":
         event_id = str(extra.get("qq_event_id") or "")
+    else:
+        msg_id = str(getattr(trigger_msg, "message_id", "") or "")
 
     return {
         "user_openid": user_openid,
