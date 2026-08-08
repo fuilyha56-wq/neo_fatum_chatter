@@ -13,7 +13,11 @@ from neo_fatum_chatter.handlers.request_snapshot_handler import (
     NFCRequestSnapshotHandler,
 )
 from src.core.components.types import EventType
-from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall, ToolResult, capture_payload_snapshot
+from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall, ToolResult
+from neo_fatum_chatter.snapshot import (
+    capture_payload_snapshot,
+    restore_payload_snapshot,
+)
 
 
 class _SessionStore:
@@ -107,3 +111,26 @@ async def test_request_snapshot_restores_once_and_captures_final_payloads() -> N
 
     assert second["payloads"] == [LLMPayload(ROLE.USER, Text("续轮消息"))]
     assert plugin.session_store.saved == 2
+
+
+def test_snapshot_discards_entire_interrupted_tool_turn() -> None:
+    """恢复时不得留下含未闭合工具调用的同轮用户消息。"""
+    snapshot = capture_payload_snapshot(
+        "snapshot-private",
+        [
+            LLMPayload(ROLE.USER, Text("已完成用户消息")),
+            LLMPayload(ROLE.ASSISTANT, Text("已完成助手回复")),
+            LLMPayload(ROLE.USER, Text("中断用户消息")),
+            LLMPayload(
+                ROLE.ASSISTANT,
+                ToolCall("call-incomplete", "action-nfc_reply", {"content": "草稿"}),
+            ),
+        ],
+    )
+
+    assert snapshot is not None
+    restored = restore_payload_snapshot(snapshot)
+
+    assert [payload.role for payload in restored] == [ROLE.USER, ROLE.ASSISTANT]
+    assert restored[0].content == [Text("已完成用户消息")]
+    assert restored[1].content == [Text("已完成助手回复")]

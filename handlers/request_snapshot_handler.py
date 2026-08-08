@@ -8,7 +8,8 @@ from src.app.plugin_system.api.event_api import EventDecision
 from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.base import BaseEventHandler
 from src.core.components.types import EventType
-from src.kernel.llm import (
+
+from ..snapshot import (
     PayloadSnapshot,
     capture_payload_snapshot,
     restore_payload_snapshot,
