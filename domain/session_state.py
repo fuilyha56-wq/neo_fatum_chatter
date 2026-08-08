@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
@@ -110,6 +111,8 @@ class NFCSession:
     # 若存在，条件主动发起逻辑不生效，直到预约时间到来或被清除
     scheduled_proactive_at: float | None = None
     scheduled_proactive_reason: str = ""  # 预约时给出的理由，触发时注入提示词
+    proactive_enabled: bool = True
+    proactive_paused_reason: str = ""
 
     # 主动思考触发时由 ProactiveHandler 写入的富上下文（silence/recent_activity/reason）。
     # 仅运行时传递，不持久化：plan_user_turn 读取后作为 turn contribution 注入到
@@ -129,6 +132,10 @@ class NFCSession:
     # 以提升 LLM prompt prefix cache 命中率。cutoff 与 chain_cutoff_ts 对齐。
     frozen_narrative: str = ""
     frozen_narrative_cutoff_ts: float = 0.0
+
+    # 最近一次实际发送给模型的完整 payload 快照。包含工具调用、工具结果、推理与媒体，
+    # 供进程重启后的首个请求恢复；运行时对象由 kernel.llm.snapshot 负责序列化。
+    request_snapshot: dict[str, Any] = field(default_factory=dict)
 
     # 近期记忆摘要（滚动压缩，替换式）：覆盖最近 compress_days_window 天的对话。
     # 由主聊天模型异步生成，以第一人称书写，重启后持久保留。
@@ -250,6 +257,11 @@ class NFCSession:
         self.scheduled_proactive_at = at
         self.scheduled_proactive_reason = reason if at is not None else ""
 
+    def set_proactive_enabled(self, enabled: bool, reason: str = "") -> None:
+        """启用或暂停当前私聊的主动联系。"""
+        self.proactive_enabled = bool(enabled)
+        self.proactive_paused_reason = "" if enabled else reason.strip()
+
     def record_mood(self, mood: str) -> None:
         """记录一次情绪到轨迹历史。"""
         if not mood or not mood.strip():
@@ -309,6 +321,7 @@ class NFCSession:
         if not habit_text or not habit_text.strip():
             return
         self.user_habits.append({
+            "id": uuid.uuid4().hex[:8],
             "habit_text": habit_text.strip(),
             "category": category.strip(),
             "recorded_at": time.time(),
@@ -325,6 +338,42 @@ class NFCSession:
             h for h in self.user_habits
             if h.get("category", "").lower() == cat
         ]
+
+    def update_habit(
+        self,
+        habit_id: str,
+        *,
+        habit_text: str = "",
+        category: str = "",
+    ) -> bool:
+        """按稳定 ID 更新一条习惯观察。"""
+        target_id = habit_id.strip()
+        if not target_id:
+            return False
+        next_text = habit_text.strip()
+        for habit in self.user_habits:
+            if str(habit.get("id", "")) != target_id:
+                continue
+            if next_text:
+                habit["habit_text"] = next_text
+            if category.strip():
+                habit["category"] = category.strip()
+            habit["updated_at"] = time.time()
+            return True
+        return False
+
+    def remove_habit(self, habit_id: str) -> bool:
+        """按稳定 ID 删除一条错误或过期的习惯观察。"""
+        target_id = habit_id.strip()
+        if not target_id:
+            return False
+        original_count = len(self.user_habits)
+        self.user_habits = [
+            habit
+            for habit in self.user_habits
+            if str(habit.get("id", "")) != target_id
+        ]
+        return len(self.user_habits) != original_count
 
     def update_chain(
         self, new_entries: list[dict[str, Any]], max_payloads: int
@@ -421,12 +470,15 @@ class NFCSession:
             "last_proactive_at": self.last_proactive_at,
             "scheduled_proactive_at": self.scheduled_proactive_at,
             "scheduled_proactive_reason": self.scheduled_proactive_reason,
+            "proactive_enabled": self.proactive_enabled,
+            "proactive_paused_reason": self.proactive_paused_reason,
             "mental_log": self.mental_log.to_list(),
             "total_interactions": self.total_interactions,
             "chain_payloads": self.chain_payloads,
             "chain_cutoff_ts": self.chain_cutoff_ts,
             "frozen_narrative": self.frozen_narrative,
             "frozen_narrative_cutoff_ts": self.frozen_narrative_cutoff_ts,
+            "request_snapshot": self.request_snapshot,
             "history_summary": self.history_summary,
             "last_compress_at": self.last_compress_at,
             "compress_round_count": self.compress_round_count,
@@ -461,6 +513,10 @@ class NFCSession:
         session.last_proactive_at = _optional_float(data.get("last_proactive_at"))
         session.scheduled_proactive_at = _optional_float(data.get("scheduled_proactive_at"))
         session.scheduled_proactive_reason = data.get("scheduled_proactive_reason", "")
+        session.proactive_enabled = bool(data.get("proactive_enabled", True))
+        session.proactive_paused_reason = str(
+            data.get("proactive_paused_reason", "") or ""
+        )
         session.mental_log = MentalLog.from_list(
             data.get("mental_log", []),
             max_entries=max_log_entries,
@@ -481,6 +537,10 @@ class NFCSession:
         session.frozen_narrative = str(data.get("frozen_narrative", "") or "")
         session.frozen_narrative_cutoff_ts = float(
             data.get("frozen_narrative_cutoff_ts", 0.0) or 0.0
+        )
+        raw_snapshot = data.get("request_snapshot", {})
+        session.request_snapshot = (
+            dict(raw_snapshot) if isinstance(raw_snapshot, dict) else {}
         )
         # 近期记忆摘要
         session.history_summary = data.get("history_summary", "")
@@ -510,13 +570,18 @@ class NFCSession:
         # 用户习惯观察
         raw_habits = data.get("user_habits", [])
         if isinstance(raw_habits, list):
-            session.user_habits = [
-                entry for entry in raw_habits
-                if isinstance(entry, dict)
-                and isinstance(entry.get("habit_text"), str)
-                and entry.get("habit_text", "").strip()
-                and _is_real_number(entry.get("recorded_at"))
-            ]
+            session.user_habits = []
+            for entry in raw_habits:
+                if not (
+                    isinstance(entry, dict)
+                    and isinstance(entry.get("habit_text"), str)
+                    and entry.get("habit_text", "").strip()
+                    and _is_real_number(entry.get("recorded_at"))
+                ):
+                    continue
+                habit = dict(entry)
+                habit["id"] = str(habit.get("id", "") or uuid.uuid4().hex[:8])
+                session.user_habits.append(habit)
         else:
             session.user_habits = []
         return session

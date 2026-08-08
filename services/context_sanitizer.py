@@ -210,6 +210,11 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
             continue
 
         if role == ROLE.USER:
+            if last_convo_role == ROLE.TOOL_RESULT:
+                cleaned.append(LLMPayload(ROLE.ASSISTANT, Text("")))
+                last_convo_role = ROLE.ASSISTANT
+                changed = True
+                logger.debug(f"[NFC] {reason}: tool_result 后插入 assistant 桥接")
             cleaned.append(payload)
             last_convo_role = ROLE.USER
             seen_user = True

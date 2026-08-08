@@ -52,6 +52,7 @@ class NFCPromptBuilder:
         chat_stream: ChatStream,
         config: Any,
         session: Any,
+        restore_request_snapshot: bool = False,
     ) -> tuple[list[LLMPayload], bool]:
         """构建 execute 启动所需的初始 payload 列表。"""
         plan = self._planner.plan_initial_context(
@@ -74,6 +75,7 @@ class NFCPromptBuilder:
             mental_log=getattr(session, "mental_log", None),
             session=session,
             serialized_chain_payloads=list(getattr(session, "chain_payloads", []) or []),
+            restore_request_snapshot=restore_request_snapshot,
             build_system_prompt_fn=self.build_system_prompt,
             build_fused_narrative_fn=self.build_fused_narrative,
         )

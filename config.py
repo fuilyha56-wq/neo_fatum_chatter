@@ -325,6 +325,13 @@ class NFCConfig(BaseConfig):
     class PromptSection(SectionBase):
         """提示词配置。"""
 
+        request_snapshot_enabled: bool = Field(
+            default=True,
+            description=(
+                "保存每次实际发送给模型的完整请求体，并在进程重启后的首次 NFC 请求中恢复。"
+            ),
+        )
+
         summary_enabled: bool = Field(
             default=True,
             description=(

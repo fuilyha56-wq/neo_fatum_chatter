@@ -15,11 +15,15 @@ from .actions.do_nothing import DoNothingAction
 from .actions.query_activity_pattern import QueryActivityPatternAction
 from .actions.query_habits import QueryHabitsAction
 from .actions.record_habit import RecordHabitAction
+from .actions.remove_habit import RemoveHabitAction
 from .actions.reply import NFCReplyAction
+from .actions.proactive_control import QueryProactiveStatusAction, SetProactiveEnabledAction
 from .actions.schedule_proactive import ScheduleProactiveAction
+from .actions.update_habit import UpdateHabitAction
 from .chatter import NeoFatumChatter
 from .config import NFCConfig
 from .handlers.proactive_handler import ProactiveHandler
+from .handlers.request_snapshot_handler import NFCRequestSnapshotHandler
 from .handlers.voice_call_history_handler import VoiceCallHistoryHandler
 from .session import NFCSessionStore
 
@@ -306,6 +310,11 @@ class NFCPlugin(BasePlugin):
             QueryActivityPatternAction,
             RecordHabitAction,
             QueryHabitsAction,
+            UpdateHabitAction,
+            RemoveHabitAction,
+            SetProactiveEnabledAction,
+            QueryProactiveStatusAction,
+            NFCRequestSnapshotHandler,
             ProactiveHandler,
             VoiceCallHistoryHandler,
         ]

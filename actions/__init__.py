@@ -14,12 +14,19 @@ from .do_nothing import DoNothingAction
 from .query_activity_pattern import QueryActivityPatternAction
 from .query_habits import QueryHabitsAction
 from .record_habit import RecordHabitAction
+from .remove_habit import RemoveHabitAction
 from .reply import NFCReplyAction
+from .proactive_control import QueryProactiveStatusAction, SetProactiveEnabledAction
+from .update_habit import UpdateHabitAction
 
 __all__ = [
     "DoNothingAction",
     "NFCReplyAction",
     "QueryActivityPatternAction",
+    "QueryProactiveStatusAction",
     "RecordHabitAction",
     "QueryHabitsAction",
+    "RemoveHabitAction",
+    "SetProactiveEnabledAction",
+    "UpdateHabitAction",
 ]

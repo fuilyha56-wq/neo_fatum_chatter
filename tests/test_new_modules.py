@@ -1,99 +1,17 @@
-"""新增模块的基本测试。
+"""新增 NFC 模块的基本测试。
 
-不依赖框架（src.kernel/src.app），仅测试纯逻辑。
-通过 mock 框架模块绕过 rich/kernel 等依赖。
+使用项目真实依赖加载纯逻辑模块，避免修改 ``sys.modules`` 污染同一 pytest
+进程中的其他 NFC 与 bridge 测试。
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from types import ModuleType
 from unittest.mock import MagicMock
 
-# ── 框架 mock：在 import 插件模块前拦截所有框架 import ──
-
-_MOCK_MODULES = [
-    "rich", "rich.console",
-    "src", "src.kernel", "src.kernel.llm", "src.kernel.llm.exceptions",
-    "src.kernel.logger", "src.kernel.logger.logger",
-    "src.kernel.concurrency", "src.kernel.config",
-    "src.kernel.scheduler", "src.kernel.scheduler.types",
-    "src.kernel.storage", "src.kernel.db",
-    "src.app", "src.app.plugin_system", "src.app.plugin_system.api",
-    "src.app.plugin_system.api.log_api",
-    "src.app.plugin_system.api.event_api",
-    "src.app.plugin_system.api.llm_api",
-    "src.app.plugin_system.api.stream_api",
-    "src.app.plugin_system.api.prompt_api",
-    "src.app.plugin_system.base",
-    "src.app.plugin_system.types",
-    "src.core", "src.core.prompt", "src.core.models",
-    "src.core.models.stream", "src.core.models.message",
-    "src.core.transport", "src.core.transport.distribution",
-    "src.core.transport.distribution.stream_loop_manager",
-    "src.core.managers", "src.core.managers.media_manager",
-]
-
-for mod_name in _MOCK_MODULES:
-    if mod_name not in sys.modules:
-        mock_mod = ModuleType(mod_name)
-        # 让框架模块的属性访问都返回 MagicMock
-        mock_mod.__dict__.setdefault("__all__", [])
-        sys.modules[mod_name] = mock_mod
-
-# 关键 mock 对象
-_llm_mock = sys.modules["src.kernel.llm"]
-_llm_mock.ROLE = MagicMock()  # type: ignore[attr-defined]
-_llm_mock.ROLE.USER = "USER"  # type: ignore[attr-defined]
-_llm_mock.ROLE.SYSTEM = "SYSTEM"  # type: ignore[attr-defined]
-_llm_mock.ROLE.ASSISTANT = "ASSISTANT"  # type: ignore[attr-defined]
-_llm_mock.ROLE.TOOL_RESULT = "TOOL_RESULT"  # type: ignore[attr-defined]
-_llm_mock.LLMPayload = MagicMock  # type: ignore[attr-defined]
-_llm_mock.Text = MagicMock  # type: ignore[attr-defined]
-_llm_mock.Content = MagicMock  # type: ignore[attr-defined]
-
-_log_mock = sys.modules["src.app.plugin_system.api.log_api"]
-_log_mock.get_logger = lambda name: MagicMock()  # type: ignore[attr-defined]
-
-_concurrency_mock = sys.modules["src.kernel.concurrency"]
-_concurrency_mock.get_task_manager = MagicMock  # type: ignore[attr-defined]
-
-_event_mock = sys.modules["src.app.plugin_system.api.event_api"]
-_event_mock.EventDecision = MagicMock()  # type: ignore[attr-defined]
-_event_mock.EventDecision.PASS = "PASS"  # type: ignore[attr-defined]
-_event_mock.EventDecision.SUCCESS = "SUCCESS"  # type: ignore[attr-defined]
-
-_base_mock = sys.modules["src.app.plugin_system.base"]
-_base_mock.BaseEventHandler = object  # type: ignore[attr-defined]
-_base_mock.BasePlugin = object  # type: ignore[attr-defined]
-_base_mock.register_plugin = lambda cls: cls  # type: ignore[attr-defined]
-_base_mock.Stop = MagicMock  # type: ignore[attr-defined]
-_base_mock.Wait = MagicMock  # type: ignore[attr-defined]
-
-# 插件根加入 path
-_PLUGIN_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PLUGIN_DIR))
-
-
-def _load_module_directly(name: str, filepath: str):
-    """直接从文件加载模块，绕过 __init__.py 包初始化。"""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(name, filepath)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-# 预加载纯逻辑模块（绕过包 __init__.py 的间接依赖）
-_turn_trigger = _load_module_directly(
-    "neo_fatum_chatter.domain.turn_trigger",
-    str(_PLUGIN_DIR / "domain" / "turn_trigger.py"),
-)
-_unread_policy = _load_module_directly(
-    "neo_fatum_chatter.runtime.unread_policy",
-    str(_PLUGIN_DIR / "runtime" / "unread_policy.py"),
+import neo_fatum_chatter.domain.turn_trigger as _turn_trigger
+import neo_fatum_chatter.runtime.unread_policy as _unread_policy
+from neo_fatum_chatter.handlers.voice_call_history_handler import (
+    VoiceCallHistoryHandler,
 )
 
 
@@ -227,15 +145,11 @@ class TestUnreadPolicy:
 
 class TestVoiceCallHistoryHandler:
     def test_summarize_empty_call(self):
-        from handlers.voice_call_history_handler import VoiceCallHistoryHandler
-
         user_summary, assistant_summary, ts = VoiceCallHistoryHandler._summarize_messages([])
         assert "没有任何对话发生" in user_summary
         assert "已收到" in assistant_summary
 
     def test_summarize_basic_call(self):
-        from handlers.voice_call_history_handler import VoiceCallHistoryHandler
-
         messages = [
             {"role": "system", "text": "语音通话已接通", "ts": 1000.0},
             {"role": "assistant", "text": "你好呀", "ts": 1001.0},
@@ -262,8 +176,6 @@ class TestVoiceCallHistoryHandler:
         assert first_ts == 1002.0
 
     def test_summarize_no_user_messages(self):
-        from handlers.voice_call_history_handler import VoiceCallHistoryHandler
-
         messages = [
             {"role": "system", "text": "通话开始", "ts": 100.0},
             {"role": "assistant", "text": "喂？", "ts": 101.0},
@@ -277,8 +189,6 @@ class TestVoiceCallHistoryHandler:
         assert first_ts == 100.0
 
     def test_summarize_invalid_messages_skipped(self):
-        from handlers.voice_call_history_handler import VoiceCallHistoryHandler
-
         messages = [
             "not a dict",
             {"role": "user", "text": "", "ts": 1.0},  # empty text skipped

@@ -231,17 +231,24 @@ class NeoFatumChatter(BaseChatter):
             model_set,
             "neo_fatum_chatter",
             context_manager=context_manager,
+            stream_id=chat_stream.stream_id,
         )
 
         # 系统提示词
         from .prompts.builder import NFCPromptBuilder
 
         prompt_builder = NFCPromptBuilder()
+        restore_request_snapshot = bool(
+            config.prompt.request_snapshot_enabled
+            and session.request_snapshot
+            and not getattr(session, "_nfc_request_snapshot_restored", False)
+        )
 
         initial_payloads, has_history = await prompt_builder.build_initial_payloads(
             chat_stream,
             config,
             session,
+            restore_request_snapshot=restore_request_snapshot,
         )
         for payload in initial_payloads:
             request.add_payload(payload)

@@ -67,11 +67,13 @@ class QueryHabitsAction(BaseAction):
         now = time.time()
         lines = [f"已记录 {len(habits)} 条习惯观察："]
         for habit in habits:
+            habit_id = str(habit.get("id", "") or "")
             cat = habit.get("category", "")
             cat_prefix = f"[{cat}] " if cat else ""
             text = habit.get("habit_text", "")
             ts = habit.get("recorded_at", 0)
             time_ago = _format_time_ago(ts, now) if isinstance(ts, (int, float)) and ts > 0 else "未知时间"
-            lines.append(f"{cat_prefix}{text}（记录于 {time_ago}）")
+            identifier = f"（ID: {habit_id}）" if habit_id else ""
+            lines.append(f"{cat_prefix}{text}（记录于 {time_ago}）{identifier}")
 
         return True, "\n".join(lines)

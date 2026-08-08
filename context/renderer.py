@@ -46,6 +46,7 @@ class ContextRenderer:
         mental_log: Any,
         serialized_chain_payloads: list[dict[str, Any]],
         session: Any | None = None,
+        restore_request_snapshot: bool = False,
         build_system_prompt_fn: Callable[
             [ChatStream, dict[str, Any] | None], Awaitable[str]
         ]
@@ -74,40 +75,40 @@ class ContextRenderer:
         # 2. 收集所有动态内容，合并到一个 USER payload
         dynamic_parts: list[str] = []
 
-        # 平台/通道信息
-        channel_text = self._build_channel_text(chat_stream)
-        if channel_text:
-            dynamic_parts.append(channel_text)
+        history_text = ""
+        if not restore_request_snapshot:
+            # 平台/通道信息
+            channel_text = self._build_channel_text(chat_stream)
+            if channel_text:
+                dynamic_parts.append(channel_text)
 
-        # 近期记忆摘要
-        summary_text = self._build_summary_text(chat_stream, plan.history_summary)
-        if summary_text:
-            dynamic_parts.append(summary_text)
+            # 近期记忆摘要
+            summary_text = self._build_summary_text(chat_stream, plan.history_summary)
+            if summary_text:
+                dynamic_parts.append(summary_text)
 
-        # 融合叙事
-        raw_limits = getattr(session, "_nfc_context_limits", None)
-        limits = dict(raw_limits) if isinstance(raw_limits, dict) else {}
-        chain_limit = int(limits.get("max_initial_chain_payloads", 0) or 0)
-        narrative_limit = int(limits.get("max_fused_narrative_chars", 0) or 0)
-
-        history_text = self._limit_fused_narrative(
-            self._get_or_build_frozen_narrative(
-                chat_stream=chat_stream,
-                mental_log=mental_log,
-                before_ts=plan.history_before_ts,
-                session=session,
-                fused_narrative_builder=fused_narrative_builder,
-            ),
-            max_chars=narrative_limit,
-        )
-        if history_text:
-            dynamic_parts.append(history_text)
-        else:
-            # 无历史时至少显示当前日期
-            time_payload = build_current_time_payload()
-            for item in time_payload.content:
-                if hasattr(item, "text"):
-                    dynamic_parts.append(item.text)  # type: ignore[attr-defined]
+            # 融合叙事
+            raw_limits = getattr(session, "_nfc_context_limits", None)
+            limits = dict(raw_limits) if isinstance(raw_limits, dict) else {}
+            narrative_limit = int(limits.get("max_fused_narrative_chars", 0) or 0)
+            history_text = self._limit_fused_narrative(
+                self._get_or_build_frozen_narrative(
+                    chat_stream=chat_stream,
+                    mental_log=mental_log,
+                    before_ts=plan.history_before_ts,
+                    session=session,
+                    fused_narrative_builder=fused_narrative_builder,
+                ),
+                max_chars=narrative_limit,
+            )
+            if history_text:
+                dynamic_parts.append(history_text)
+            else:
+                # 无历史时至少显示当前日期
+                time_payload = build_current_time_payload()
+                for item in time_payload.content:
+                    if hasattr(item, "text"):
+                        dynamic_parts.append(item.text)  # type: ignore[attr-defined]
 
         # 合并动态内容为一个 USER payload
         chain_payloads: list[LLMPayload] = []
@@ -116,7 +117,10 @@ class ContextRenderer:
             chain_payloads.append(LLMPayload(ROLE.USER, Text(merged_dynamic_text)))
 
         # 3. 恢复历史对话链（独立 payload，绕过 context manager 避免重复注入 system_reminder）
-        limited_chain = self._limit_serialized_chain(
+        raw_limits = getattr(session, "_nfc_context_limits", None)
+        limits = dict(raw_limits) if isinstance(raw_limits, dict) else {}
+        chain_limit = int(limits.get("max_initial_chain_payloads", 0) or 0)
+        limited_chain = [] if restore_request_snapshot else self._limit_serialized_chain(
             serialized_chain_payloads,
             max_payloads=chain_limit,
         )
@@ -135,7 +139,11 @@ class ContextRenderer:
 
         # 组装最终列表：system_payloads + chain_payloads
         payloads = system_payloads + chain_payloads
-        has_history = bool(history_text) or bool(restored_payloads)
+        has_history = (
+            bool(history_text)
+            or bool(restored_payloads)
+            or restore_request_snapshot
+        )
         return payloads, has_history
 
     async def build_system_prompt(

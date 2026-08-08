@@ -58,6 +58,8 @@ class ProactiveThinker:
             session = await self._session_store.peek(stream_id)
             if session is None:
                 continue
+            if not session.proactive_enabled:
+                continue
             if session.scheduled_proactive_at is not None:
                 now = time.time()
                 if now >= session.scheduled_proactive_at:
@@ -68,6 +70,12 @@ class ProactiveThinker:
 
     async def _check_and_trigger(self, stream_id: str, session: NFCSession) -> bool:
         """检查单个 session 是否应触发，处理过期预约的持久化清除。"""
+        if not session.proactive_enabled:
+            logger.debug(
+                f"当前会话已暂停主动联系: stream={stream_id[:8]} "
+                f"reason={session.proactive_paused_reason or '未说明'}"
+            )
+            return False
         now = time.time()
         if session.scheduled_proactive_at is not None:
             if now >= session.scheduled_proactive_at:

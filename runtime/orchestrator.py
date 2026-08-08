@@ -120,6 +120,64 @@ class _LoopState:
     history_images_injected: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _TemporaryPayloadSnapshot:
+    """记录一次临时 payload 注入前的响应链状态。"""
+
+    source_payloads: tuple[LLMPayload, ...]
+    insertion_index: int
+    payload: LLMPayload
+
+
+def append_temporary_payload(
+    response: Any,
+    payload: LLMPayload,
+) -> _TemporaryPayloadSnapshot:
+    """向响应链临时追加 payload，并返回可用于回滚的快照。
+
+    新的请求视图实现不再直接修改原始响应链；保留此 helper 是为了兼容仍需
+    在原链上构造一次性上下文的调用方。对应的回滚会保留随后追加的助手回复。
+    """
+    source_payloads = tuple(getattr(response, "payloads", []) or [])
+    snapshot = _TemporaryPayloadSnapshot(
+        source_payloads=source_payloads,
+        insertion_index=len(source_payloads),
+        payload=payload,
+    )
+    add_payload = getattr(response, "add_payload", None)
+    if callable(add_payload):
+        add_payload(payload)
+    else:
+        response.payloads = [*source_payloads, payload]
+    return snapshot
+
+
+def restore_temporary_payload(
+    response: Any,
+    snapshot: _TemporaryPayloadSnapshot,
+) -> None:
+    """从响应链移除临时 payload，并保留发送后新增的响应 payload。"""
+    current_payloads = list(getattr(response, "payloads", []) or [])
+    insertion_index = snapshot.insertion_index
+    if (
+        len(current_payloads) > insertion_index
+        and current_payloads[insertion_index] is snapshot.payload
+    ):
+        restored_payloads = (
+            current_payloads[:insertion_index]
+            + current_payloads[insertion_index + 1 :]
+        )
+    else:
+        restored_payloads = list(current_payloads)
+
+    for index, source_payload in enumerate(snapshot.source_payloads):
+        if index >= len(restored_payloads):
+            break
+        if getattr(source_payload, "role", None) == ROLE.USER:
+            restored_payloads[index] = source_payload
+    response.payloads = restored_payloads
+
+
 class _LLMErrorOutcome:
     """LLM 错误处理结果。"""
     __slots__ = ("should_break", "should_continue", "failure", "retry_delay")

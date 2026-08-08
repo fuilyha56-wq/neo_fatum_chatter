@@ -86,11 +86,13 @@ def filter_interrupt_messages(
 ) -> list[Any]:
     """筛选真正应该打断 LLM 生成的新消息。
 
-    已知消息和 NFC 主动发起内部触发都不应取消当前 LLM 输出。
+    已知消息、没有稳定 message_id 的消息和 NFC 主动发起内部触发都不应
+    取消当前 LLM 输出。
     """
     return [
         message
         for message in current_msgs
-        if getattr(message, "message_id", None) not in known_unread_ids
+        if (message_id := getattr(message, "message_id", None))
+        and message_id not in known_unread_ids
         and not is_proactive_trigger_message(message)
     ]
