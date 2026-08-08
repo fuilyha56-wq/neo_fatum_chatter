@@ -1,27 +1,31 @@
-# Neo Fatum Chatter (NFC)
+# Neo Fatum Chatter
 
-> ## v2.5.6 更新
->
-> - **可配置流式输出**：接入外部流式 Service（支持 `start_streaming`），对 QQBot 私聊（C2C）做打字机式逐块更新；非 qqbot 或启动失败时降级普通发送。新增 `[reply].streaming_service_signature` 指定流式 Service 签名，留空自动发现。流式更新中途失败时自动 `controller.end()` 收尾，避免流卡死与重复消息。
->
-> ---
->
-> **版本选择说明**
->
-> | 版本 | 说明 |
-> |------|------|
-> | `v2.5.6` | **当前推荐** — 可配置流式输出（QQBot C2C 打字机）|
-> | `v2.5.5` | 系统提示词可自定义 + 人设沉浸强化 |
-> | `v2.5.4` | enabled 动态切换 + 注入点可配置 + v2.5.3 三项修复 |
-> | `v2.5.3` | 打断装哑 / tool_call 续轮丢失 / 主动思考炸缓存 |
-> | `v2.5.2` | 摘要开关 + 等待抑制期显式缓冲 |
-> | `v2.5.1` | 工具调用协议强化 |
-> | `v2.4.1` | 缓存边界强化 |
-> | `v2.3.2` | 感知兜底改用 sub actor 提取 |
+> *Fatum —— 拉丁语中的「命运」。不是预定的结局，而是每个念头汇成的流向。*
 
-*Fatum — 拉丁语中"命运"。*
+**NFC 是一个让 AI 以「连续心理活动」的方式与人对话的私聊聊天器。** 它不把对话当作一问一答的任务，而是模拟一个有内心世界的人：说完话会等、会回想、会走神、会主动想起你——每一次回复背后都有一条连贯的心迹。
 
-**Neo Fatum Chatter 对话引擎 — 基于心理活动流的私聊特化聊天器** — Neo-MoFox 插件
+| 属性 | 值 |
+|---|---|
+| 插件名 | `neo_fatum_chatter` |
+| 版本 | v2.5.9 |
+| 适用场景 | 私聊（`ChatType.PRIVATE`） |
+| 许可证 | AGPL-3.0 |
+
+---
+
+## 目录
+
+1. [它解决什么问题](#它解决什么问题)
+2. [核心设计：心理活动流](#核心设计心理活动流)
+3. [对话循环如何运转](#对话循环如何运转)
+4. [特性速览](#特性速览)
+5. [安装](#安装)
+6. [配置](#配置)
+7. [LLM 工具（Actions）](#llm-工具actions)
+8. [事件与外部集成](#事件与外部集成)
+9. [项目结构](#项目结构)
+10. [开发与测试](#开发与测试)
+11. [FAQ](#faq)
 
 ---
 
@@ -29,177 +33,209 @@
 
 NFC 是面向私聊场景的 Chatter 插件。核心设计是把 LLM 的每次决策与内心独白（MentalLog）绑定，形成连续的心理活动流。对话历史与内心活动按时间线交织，让模型回复时不仅看到说了什么，还能"回想起"当时在想什么。
 
-**主要能力**
-
-- 每次回复附带内心独白，记录情绪与期待
-- 显式维护 SceneState，避免把平台/私聊通道脑补成生活场景
-- 等待超时后分析消息类型，决定追问、继续等或结束
-- 沉默超过阈值有概率主动发起，深夜自动静默
-- 多条连发消息在积累窗口内合并后统一处理
-- LLM 生成期间检测到新消息会取消当前请求并重新处理
-- 原生多模态支持，图片直接进 LLM 上下文
-- 回复拆分为短句模拟打字节奏逐条发送，可选流式打字机
-- 主动发起以 `schedule_proactive` 预约为主、沉默触发为兜底
 
 ---
 
-## 架构
+## 它解决什么问题
 
-### 目录结构
+传统聊天机器人是「刺激 → 反应」：
 
-| 层 | 目录 / 文件 | 职责 |
+```text
+用户发消息 ──► 模型生成回复 ──► 发送 ──► 等用户再发
+```
+
+这种模式下，AI 没有"状态"：不知道对方沉默意味着什么，不会主动想起谁，回复之间缺乏心理连续性。你得到的是一个永远在线、永远秒回、永远不累的客服。
+
+NFC 试图还原的，是**一段真实私人关系的时间结构**：
+
+```text
+        说了一句话
+        │ 期待对方反应
+        ▼
+   ┌─ 等待 ─────────────────┐
+   │  • 对方回了 → 继续聊    │
+   │  • 对方沉默 → 内心活动  │
+   │    （是追问？是等？）    │
+   │  • 沉默太久 → 主动想起  │
+   │    （预约的时刻到了吗）  │
+   └────────────────────────┘
+```
+
+它在每一次决策时都留下「内心独白」，把零散的对话编织成一条连续的心理活动流——让回复不仅是"对消息的反应"，更是"此刻这个人在想什么"的外化。
+
+## 核心设计：心理活动流
+
+NFC 把对话拆成两层并行的时间线：
+
+| 层 | 内容 | 作用 |
 |---|---|---|
-| 入口 / 配置 | `plugin.py` `config.py` `manifest.json` | 注册组件、加载配置、调度器 hook、`enabled` 动态注册/注销 |
-| Chatter 门面 | `chatter.py` | `NeoFatumChatter` 入口，委托 runtime orchestrator，保留 helper |
-| 运行时编排 | `runtime/` | `orchestrator` 主循环、`turn_controller` 回合准备与提交、`message_buffer` 消息积累、`interrupt_controller` LLM 打断、`request_view` 请求视图裁剪、`unread_policy` 未读优先级 |
-| 协议归一化 | `protocol/` | `response_normalizer` `compat_adapter`（含 DeepSeek 兼容）`decision_parser` `call_resolver` `perception_retry` |
-| 执行 | `execution/` | `reply_executor` 段落清洗与分段发送，`ExecutionResult` 数据类 |
-| 上下文 | `context/` + `prompts/` | `planner` `renderer` + 多 `sources/`；`prompts/` 含 `builder` `modules` `templates` |
-| 服务 | `services/` | `timeout_service` `proactive_service` `summary_service` `context_sanitizer` `multimodal_service` `perception_extractor` `compressor` |
-| 思考器 | `thinker/` | `proactive` 主动发起检查、`timeout_handler` 超时触发 |
-| 领域 | `domain/` | `NFCSession` `Decision` `SceneState` `TurnTrigger` 纯状态模型 |
-| 持久化 | `persistence/` | `session_store` 文件与索引 IO、并发锁 |
-| 动作 | `actions/` | LLM 工具 schema 壳：`nfc_reply` `do_nothing` `schedule_proactive` `query_activity_pattern` `record_habit` `query_habits` |
-| 事件入口 | `handlers/` | `proactive_handler` 主动发起事件入口、`voice_call_history_handler` 语音通话历史压缩、`stream_wakeup_adapter` 隔离框架私有 API |
-| 多模态 | `multimodal.py` | 图片预算、媒体提取与混合内容构建 |
-| 兼容 / 解析 | `llm_compat.py` `parser.py` `mental_log.py` `models.py` | LLM 兼容层、调用解析、活动流日志、枚举与数据模型 |
-| 调试 | `debug/` | `log_formatter` 提示词与响应美化输出 |
-| 测试 | `tests/` | pytest 协议 / 执行 / 多模态 / 配置 / 运行时去重 |
-| 兼容入口 | `session.py` | `NFCSession` / `NFCSessionStore` re-export 到 `domain/` `persistence/`，新代码请直接从子包引用 |
+| **对话层** | 双方实际发送的消息 | 对方看到的内容 |
+| **心理层（MentalLog）** | 每次决策前的 `thought`（内心想法）、`expected_reaction`（预期反应）、`mood`（心情）、等待时长、沉默时间 | 模型"回想"时的线索 |
 
-接口清单见 [API.md](API.md)。
+两层交织后一起进入下一次 LLM 上下文。模型回复时不仅看到"对方说了什么"，还能"回想起自己当时在想什么"——这正是连续人格感的来源。
 
-### 单一决策协议
+**实现载体：** 每个私聊对象对应一个 `NFCSession`（持久化在磁盘），包含：
 
-NFC 当前正式只保留一条内部协议：
+- `mental_log`：心理活动流（上限 `max_log_entries` 条）
+- `chain_payloads`：LLM 上下文持久化链（上限 `max_context_payloads` 对）
+- `waiting_config`：当前等待状态（开始时间 / 期望时长 / 当时想法）
+- `scheduled_proactive_at`：模型预约的下次主动联系时间
+- `user_habits`：模型对对方习惯的观察记录
+- `request_snapshot`：最近一次实际发送的完整请求体
 
+## 对话循环如何运转
+
+NFC 的主循环由 `runtime/orchestrator.py` 驱动，每一轮先判定**触发原因**，再决定是否调用 LLM：
+
+```mermaid
+flowchart TD
+    A[流启动] --> B{本轮触发?}
+    B -->|新消息到达| C[回合: 新消息]
+    B -->|有待处理工具结果| D[回合: 工具续轮]
+    B -->|等待中且超时| E[回合: 超时续话]
+    B -->|无事发生| F[让出 tick, 继续等]
+
+    C --> G[构建上下文]
+    D --> G
+    E --> G
+
+    G --> H[调用 LLM<br/>tool calling]
+    H --> I[解析为 Decision]
+    I --> J{决策分支}
+    J -->|nfc_reply| K[分段发送回复<br/>进入等待]
+    J -->|do_nothing| L[沉默, 设定等待]
+    J -->|schedule_proactive| M[预约未来联系]
+    J -->|第三方工具| N[工具结果回填<br/>下一轮续轮]
+    J -->|LLM 失败| O[重试 / 放弃]
+
+    K --> A
+    L --> A
+    M --> A
+    N --> A
 ```
-tool calling -> response_normalizer -> Decision
+
+触发原因由 `domain/turn_trigger.py` 分类（`NEW_MESSAGES` / `FOLLOWUP_TOOL_RESULT` / `TIMEOUT_EXPIRED` / `IDLE_WAIT`），整个循环产出统一的内部决策对象 `Decision`（`domain/decision.py`）。
+
+### 三个关键节奏机制
+
+**① 消息积累** —— 收到新消息后不立即回复，先等一个积累窗口（默认 1.5 秒，上限 5 秒）把连发消息合并成一次 LLM 调用，避免逐条触发。
+
+**② 等待与超时** —— 发送或沉默后进入等待。到 `max_wait_seconds` 未回复则重新注入上下文，让模型决定追问、继续等或放弃；连续超时达上限后停止等待。等待期间收到新消息默认**抑制到超时点统一处理**（`suppress_early_wake`），整个抑制期只构建一次上下文。
+
+**③ 生成打断** —— LLM 生成期间每 `interrupt_poll_seconds`（默认 0.5 秒）轮询一次，发现新消息就取消当前请求，把打断消息写入心理活动流后重新决策，避免"堵着嘴回复"。
+
+### 主动联系：从"被动等"到"会想起"
+
+- **预约为主**：模型可在任意时刻调用 `schedule_proactive` 预约 30 分钟~24 小时后的主动联系，并写下理由——理由会保存，触发时注入提示词，让"未来的自己"能自然接上。
+- **沉默兜底**：无预约且沉默超过 `silence_threshold` 时，按 `trigger_probability` 概率兜底触发。
+- **会话级开关**：`nfc_set_proactive_enabled` 可暂停/恢复某段私聊的主动联系（带原因）；`nfc_query_proactive_status` 可查询预约、冷却或暂停状态。
+- **缓存友好**：主动思考注入的富上下文（沉默时长 / 近期活动 / 预约理由）只作为临时 turn contribution，不进入持久历史，保护 prompt prefix cache。
+- **勿扰时段**：默认 23:00~07:00 静默（预约不受勿扰限制）。
+
+## 特性速览
+
+- 🧠 **心理活动流**：每次决策绑定内心独白，形成连续人格
+- ⏳ **自然节奏**：等待 / 超时追问 / 沉默 / 分段打字发送（可选流式打字机）
+- 💬 **主动联系**：预约为主、沉默兜底、勿扰时段
+- 📦 **消息积累**：连发消息合并处理，打断机制防止生成中堵塞
+- 🖼️ **原生多模态**：图片直接进 LLM 上下文，可跳过 VLM 转述
+- 🧩 **用户画像**：习惯记录 / 查询 / 纠正 / 删除，形成长期记忆
+- 🔌 **第三方工具**：支持调用外部工具并续轮，兼容 DeepSeek 等模型
+- 📞 **语音通话衔接**：通话历史打包成一对摘要补回上下文，不挤占额度
+
+## 安装
+
+**方式一：插件市场**
+
+```bash
+mpdt market install neo_fatum_chatter
 ```
 
-运行时主流程在 `runtime/orchestrator.py`，回合准备与提交在 `runtime/turn_controller.py`。超时、主动预约、近期摘要、多模态历史图片注入等外围副作用通过 `services/` 进入主流程。
+**方式二：手动**
 
-**核心动作**
-
-| 动作 | 用途 |
-|------|------|
-| `nfc_reply` | 发送消息，携带 `content` `thought` `expected_reaction` `max_wait_seconds` `mood` |
-| `do_nothing` | 不回复，携带 `thought` `max_wait_seconds` |
-| `schedule_proactive` | 预约下一次主动思考，携带 `delay_minutes` `reason` |
-
-**用户画像工具**
-
-| 动作 | 用途 |
-|------|------|
-| `nfc_query_activity_pattern` | 查询对方消息活跃时段分布 |
-| `nfc_record_habit` | 记录对对方习惯的观察，持久化到 session |
-| `nfc_query_habits` | 查询已记录的习惯观察，可按分类过滤 |
-
-### 消息积累窗口
-
-检测到第一条新消息后，NFC 等待一个固定窗口（默认 1.5 秒）收集连发的多条消息，再统一提交给 LLM。最大积累时长默认 5 秒。
-
-### 等待抑制与显式缓冲
-
-`wait.suppress_early_wake=true` 时，等待期间收到的新消息不会立即处理，而是收集到 `session.suppressed_messages`。超时到期后缓冲区里的所有消息**一次性合并为单条 USER payload** 注入 LLM，整个抑制期只构建一次上下文。超时点以 `waiting_config.started_at + max_wait_seconds` 为绝对截止时间，不被新消息推迟。
-
-### LLM 生成打断
-
-LLM 生成期间每 `interrupt_poll_seconds`（默认 0.5 秒）检测一次新消息。检测到打断时取消当前请求，把打断消息写入 `mental_log`，清掉 `waiting` 状态，重新进入主循环。
-
-### 超时与主动发起
-
-回复后进入等待状态；超时后重新注入上下文，让 LLM 决策追问、放弃或继续等待。长时间沉默时主动发起检查按配置决定是否触发。`schedule_proactive` 是主要主动联系手段，沉默触发器仅作兜底。主动思考触发的富上下文（沉默时长 / 近期活动 / 预约理由）作为 turn contribution 临时注入，不进入持久历史，保护 prompt prefix cache。
-
-### enabled 动态切换
-
-`[general].enabled=false` 时：
-- `get_components()` 不返回 `NeoFatumChatter`，重启后 chatter_manager 选不到 NFC
-- `on_config_updated()` 注销已注册的 Chatter，清理所有运行中的 NFC active chatter 实例，并强制重启受影响的流循环，让 `ChatterManager` 重新选 chatter（DFC 等才能接管）
-
-其他组件（actions / handlers）始终注册，满足"插件可被发现和加载，但不参与 chatter 调度"的语义。
-
----
+从 GitHub Release 下载 `.mfp` 文件放入 `plugins/`，重启主程序。
 
 ## 配置
 
-配置文件路径：`config/plugins/neo_fatum_chatter/config.toml`
+配置文件：`config/plugins/neo_fatum_chatter/config.toml`（首次启动自动生成）。所有配置均支持热重载。
 
 ### `[general]` 基础与模型
 
 | 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `enabled` | `true` | 是否启用 NFC Chatter（false 时动态让位） |
-| `model_task` | `actor` | 走 `model.toml` 的 task；`models` 为空时使用 |
-| `models` | `[]` | 模型名列表，非空时覆盖 `model_task`，按顺序 fallback |
-| `temperature` | `0.7` | 模型温度，仅在 `models` 非空时生效 |
-| `max_tokens` | `8000` | 最大输出 token，仅在 `models` 非空时生效 |
-| `native_multimodal` | `false` | 启用后图片直接进 LLM payload |
-| `max_images_per_payload` | `4` | 原生多模态总图片配额（bot 已发 > 用户新消息 > 历史补充） |
-| `use_tool_calling` | `true` | 主动发起 / 超时上下文是否使用工具调用决策提示 |
+|---|---|---|
+| `enabled` | `true` | 是否启用；`false` 时注销 Chatter 让位给其他私聊聊天器 |
+| `model_task` | `actor` | 使用 `model.toml` 中的哪个 task（`models` 为空时） |
+| `models` | `[]` | 模型名列表，非空时覆盖 `model_task` 并按顺序 fallback |
+| `temperature` | `0.7` | 温度（仅 `models` 非空时生效） |
+| `max_tokens` | `8000` | 最大输出 token（仅 `models` 非空时生效） |
+| `native_multimodal` | `false` | 图片直接进 LLM payload（需模型支持多模态） |
+| `max_images_per_payload` | `4` | 单次 payload 图片配额（bot 已发 > 用户新消息 > 历史补充） |
+| `use_tool_calling` | `true` | ⚠️ 已废弃，仅向后兼容；NFC 已统一走工具调用协议 |
 | `max_compat_retries` | `1` | 纯文本草稿未形成工具调用时的重试次数 |
-| `perception_extract_task` | `sub_actor` | 感知兜底回填时的模型任务名 |
-| `max_consecutive_llm_failures` | `15` | 连续 LLM 失败容忍次数，0 表示不限制 |
-| `custom_decision_prompt` | `""` | 注入到系统提示词的自定义指导，留空不生效 |
-| `blocked_tools` | `["send_text","pass_and_wait","stop_conversation"]` | 屏蔽不暴露给 LLM 的工具末段名 |
-| `segment_instruction` | 默认分段指引 | 注入提示词的分段指令，留空不注入 |
-| `wait_instruction` | 默认等待指引 | 注入提示词的 `max_wait_seconds` 说明，留空不注入 |
-| `enable_custom_tick_interval` | `false` | 是否启用 NFC 独立 tick 间隔 |
-| `custom_tick_interval` | `5.0` | 启用上一项时使用的 tick 间隔（秒） |
+| `perception_extract_task` | `sub_actor` | 感知兜底回填用的模型 task（`sub_actor` 省开销 / `actor` 更懂风格） |
+| `max_consecutive_llm_failures` | `15` | 连续 LLM 失败容忍次数，超过则终止会话循环；0 不限 |
+| `custom_decision_prompt` | `""` | 注入系统提示词的自定义决策指导 |
+| `blocked_tools` | `["send_text", "pass_and_wait", "stop_conversation"]` | 不暴露给 LLM 的工具末段名 |
+| `segment_instruction` | 默认 | 注入提示词的分段发送指导；留空不注入 |
+| `wait_instruction` | 默认 | 注入提示词的 `max_wait_seconds` 说明；留空不注入 |
+| `enable_custom_tick_interval` | `false` | 启用 NFC 独立主循环 tick 间隔 |
+| `custom_tick_interval` | `5.0` | 独立 tick 间隔（秒） |
 
 ### `[wait]` 等待机制
 
 | 字段 | 默认值 | 说明 |
-|------|--------|------|
+|---|---|---|
 | `enabled` | `true` | 是否启用回复等待 |
 | `min_seconds` | `10.0` | 最小等待秒数 |
 | `max_seconds` | `600.0` | 最大等待秒数 |
-| `max_consecutive_timeouts` | `3` | 连续超时上限 |
-| `suppress_early_wake` | `true` | 等待期间收到新消息是否抑制到超时点合并处理 |
+| `max_consecutive_timeouts` | `3` | 连续超时上限，达到后不再等待 |
+| `suppress_early_wake` | `true` | 等待期间新消息是否抑制到超时点统一处理 |
 
-### `[proactive]` 主动发起
+### `[proactive]` 主动联系
 
 | 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `enabled` | `true` | 是否启用 |
-| `silence_threshold` | `7200` | 沉默阈值（秒） |
+|---|---|---|
+| `enabled` | `true` | 是否启用主动联系 |
+| `silence_threshold` | `7200` | 沉默阈值（秒），超过后可能主动发起 |
 | `trigger_probability` | `0.3` | 沉默触发概率 |
 | `min_interval` | `1800` | 两次主动发起最小间隔（秒） |
 | `quiet_hours_start` / `quiet_hours_end` | `23:00` / `07:00` | 勿扰时段 |
-| `check_interval` | `60` | 检查间隔（秒） |
-| `activity_service_signature` | `""` | 外部活跃度服务签名，留空走内置判断 |
-| `activity_service_method` | `is_user_active` | 外部活跃度服务方法名 |
-| `schedule_guidance` | 默认指引 | `schedule_proactive` 工具描述中的使用场景指导 |
+| `check_interval` | `60` | 主动联系检查间隔（秒） |
+| `schedule_guidance` | 默认 | `schedule_proactive` 工具的使用场景指导 |
+| `activity_service_signature` | `""` | 外部活跃度服务签名（留空走内置判断） |
+| `activity_service_method` | `is_good_time` | 活跃度方法名，签名 `(stream_id: str) -> float`(0~1) |
 
 ### `[reply]` 回复节奏
 
 | 字段 | 默认值 | 说明 |
-|------|--------|------|
+|---|---|---|
 | `typing_chars_per_sec` | `15.0` | 模拟打字速度（字/秒） |
 | `typing_delay_min` / `typing_delay_max` | `0.8` / `4.0` | 打字延迟范围（秒） |
 | `segment_delay_min` / `segment_delay_max` | `0.5` / `2.0` | 多段消息间隔范围（秒） |
-| `streaming_enabled` | `false` | 是否启用流式打字机效果 |
-| `streaming_service_signature` | `""` | 指定流式 Service 签名；留空自动发现支持 `start_streaming` 的 Service |
+| `streaming_enabled` | `false` | 流式打字机（需平台适配器支持编辑消息） |
+| `streaming_service_signature` | `""` | 指定流式 Service；留空自动发现支持 `start_streaming` 的 |
 | `streaming_chunk_size` | `10` | 流式每次追加字符数 |
 | `streaming_interval` | `0.1` | 流式追加间隔（秒） |
 
-### `[prompt]` 活动流与压缩
+### `[prompt]` 记忆与上下文
 
 | 字段 | 默认值 | 说明 |
-|------|--------|------|
+|---|---|---|
+| `request_snapshot_enabled` | `true` | 保存每次实际发送的完整请求体，重启后首个请求自动恢复 |
 | `summary_enabled` | `true` | 是否启用近期记忆摘要 |
-| `max_log_entries` | `50` | 最大活动流条目数 |
-| `max_context_payloads` | `20` | LLM 上下文持久化链最大条目数 |
+| `system_prompt_override` | 标准模板 | 系统提示词自定义（含 XML 配对 / 占位符 / 6 大核心标签校验，违规自动回退） |
+| `max_log_entries` | `50` | 心理活动流最大条目数 |
+| `max_context_payloads` | `20` | 上下文持久化链最大条目数 |
 | `max_initial_chain_payloads` | `12` | execute 启动时最多恢复进 LLM 的 chain 条数 |
 | `max_fused_narrative_chars` | `12000` | 融合叙事最大字符数 |
-| `compress_every_n_rounds` | `50` | 每完成 N 轮触发一次压缩 |
-| `compress_days_window` | `3.0` | 压缩覆盖的历史时间窗口（天） |
+| `compress_every_n_rounds` | `50` | 每完成 N 轮触发一次记忆压缩 |
+| `compress_days_window` | `3.0` | 压缩覆盖的历史窗口（天） |
 | `min_compress_interval_minutes` | `120.0` | 两次压缩最短间隔（分钟） |
 
 ### `[buffer]` 消息积累与打断
 
 | 字段 | 默认值 | 说明 |
-|------|--------|------|
+|---|---|---|
 | `accumulate_window` | `1.5` | 消息积累窗口（秒），0 禁用 |
 | `accumulate_max_window` | `5.0` | 积累窗口最大总时长（秒） |
 | `interrupt_enabled` | `true` | 是否启用 LLM 生成打断 |
@@ -208,41 +244,119 @@ LLM 生成期间每 `interrupt_poll_seconds`（默认 0.5 秒）检测一次新�
 ### `[flashback]` 注入点兼容
 
 | 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `injection_point` | `default_chatter_user_prompt` | `on_prompt_build` 事件注入点名。默认对齐 booku_memory / DFC bridge 等主流注入器；需回退 NFC 私有注入点时改为 `NFC_user_prompt` |
+|---|---|---|
+| `injection_point` | `default_chatter_user_prompt` | `on_prompt_build` 事件注入点名；回退私有注入点用 `NFC_user_prompt` |
 
 ### `[debug]` 调试
 
 | 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `show_prompt` | `false` | 日志中显示完整提示词 |
-| `show_response` | `true` | 日志中显示 LLM 响应美化摘要 |
+|---|---|---|
+| `show_prompt` | `false` | 日志显示完整提示词 |
+| `show_response` | `true` | 日志显示 LLM 响应美化摘要 |
 
----
+## LLM 工具（Actions）
 
-## 安装
+NFC 通过原生 tool calling 向 LLM 暴露以下动作（仅 NFC 调度时可见）：
 
-通过 Neo-MoFox 插件市场：
+### 对话决策
 
-```bash
-mpdt market install neo_fatum_chatter
+| 工具 | 说明 |
+|---|---|
+| `nfc_reply` | 发送消息。参数：`content`（段落列表，逐条发送）、`thought`、`expected_reaction`、`max_wait_seconds`、`mood`、`reply_to` |
+| `do_nothing` | 沉默。参数：`thought`、`max_wait_seconds` |
+| `schedule_proactive` | 预约主动联系。参数：`delay_minutes`（30~1440，0 取消）、`reason`（必填） |
+
+### 用户画像
+
+| 工具 | 说明 |
+|---|---|
+| `nfc_query_activity_pattern` | 查询对方活跃时段分布 |
+| `nfc_record_habit` | 记录对对方的习惯观察（上限 50 条） |
+| `nfc_query_habits` | 查询已记录习惯，可按分类过滤 |
+| `nfc_update_habit` | 按 `habit_id` 纠正过时/有误的习惯 |
+| `nfc_remove_habit` | 按 `habit_id` 删除被证伪/过期的习惯 |
+
+### 主动联系控制
+
+| 工具 | 说明 |
+|---|---|
+| `nfc_set_proactive_enabled` | 暂停/恢复当前私聊的主动联系（带原因） |
+| `nfc_query_proactive_status` | 查询预约 / 冷却 / 暂停状态 |
+
+## 事件与外部集成
+
+### 事件总线
+
+| 事件 | 方向 | 说明 |
+|---|---|---|
+| `NFC.proactive_trigger` | NFC → 外部 | 主动联系触发时发布，payload 含 `stream_id` 与预约理由 |
+| `voice_call.ended` | 外部 → NFC | 通话结束后把通话历史打包成一对 user/assistant 摘要补回上下文 |
+| `BEFORE_LLM_REQUEST` | 框架 → NFC | 请求体快照捕获/恢复的挂载点（`request_name == "neo_fatum_chatter"`） |
+| `on_prompt_build` | NFC → 外部 | USER payload 构建钩子，供外部注入器返回上下文贡献 |
+
+### 外部注入器
+
+监听 `on_prompt_build`，比对 `payload.prompt_name`（默认 `default_chatter_user_prompt`），返回 `ContextContribution` 列表：
+
+- `scope = "session"`：按哈希缓存
+- `scope = "turn"`：每轮独立，自动去重
+
+### 外部活跃度服务
+
+配置 `proactive.activity_service_signature` 后，主动联系判断委托外部服务的方法（`activity_service_method`），返回 0~1 表示当前时机好坏；未配置时使用内置 `is_user_typically_active_now()`。
+
+## 项目结构
+
+```
+neo_fatum_chatter/
+├── plugin.py              # 插件入口：注册组件 / 调度器 hook / VLM 跳过预注册
+├── config.py              # NFCConfig：全部配置 section
+├── chatter.py             # NeoFatumChatter 门面（BaseChatter 派生）
+├── manifest.json          # 组件注册清单
+├── actions/               # LLM 工具（薄壳，逻辑下沉 execution/）
+├── runtime/               # 主循环 orchestrator / turn_controller / interrupt_controller ...
+├── protocol/              # 协议归一化：response_normalizer / decision_parser / compat_adapter ...
+├── execution/             # reply_executor：段落规整 → 清洗 → 分段发送
+├── context/ + prompts/    # 上下文规划与渲染；提示词 builder / modules / templates
+├── services/              # timeout / proactive / summary / multimodal / sanitizer ...
+├── thinker/               # proactive 主动检查、timeout_handler 超时处理
+├── domain/                # 纯领域模型：NFCSession / Decision / SceneState / TurnTrigger
+├── persistence/           # session_store：JSON 文件 IO + 索引 + 并发锁
+├── handlers/              # 事件入口：proactive / voice_call / request_snapshot / stream_wakeup
+├── multimodal.py          # 图片预算与媒体提取
+├── snapshot.py            # 请求体快照序列化 / 恢复
+├── mental_log.py          # 心理活动流容器
+├── models.py              # 共享数据模型与枚举
+├── llm_compat.py / parser.py  # LLM 兼容层 / 旧版解析路径
+└── debug/                 # log_formatter 日志美化
 ```
 
-或从 GitHub Release 下载 `.mfp` 放入 `plugins/`。
-
----
-
-## 开发
+## 开发与测试
 
 ```bash
 cd plugins/neo_fatum_chatter
 pytest tests/ -c pyproject.toml
 ```
 
-接口清单见 [API.md](API.md)。
+测试覆盖协议归一化、执行器、多模态、配置、运行时去重与会话控制动作。接口清单见 [API.md](API.md)。
+
+## FAQ
+
+**Q：NFC 和普通 Chatter 有什么区别？**
+普通 Chatter 是消息驱动的一问一答；NFC 维护心理活动流 + 等待/超时/主动联系状态机，回复具有心理连续性，且会主动联系。
+
+**Q：如何让 NFC 让位给其他聊天器（如 DFC）？**
+设置 `[general].enabled = false` 并重载配置，NFC 会注销已注册的 Chatter 并重启受影响的流，让 `ChatterManager` 重新选择。
+
+**Q：为什么我发了多条消息它只回一次？**
+消息积累窗口（默认 1.5 秒）把连发消息合并成一次 LLM 调用，这是刻意设计；等待期间的新消息还会被抑制到超时点统一处理（可关闭 `suppress_early_wake`）。
+
+**Q：流式打字机为什么没生效？**
+`streaming_enabled` 需配合平台适配器的消息编辑能力（当前针对 QQBot C2C）；非 qqbot 或 Service 启动失败时自动降级为普通分段发送。
+
+**Q：`use_tool_calling` 配置了为什么没效果？**
+该字段已废弃：NFC 自 v2.5.x 起统一走原生 tool calling 协议，此配置仅保留以兼容旧配置文件。
 
 ---
 
-## 许可证
-
-AGPL-3.0
+*命运不是被决定的 —— 它是每个念头汇成的流向。*
