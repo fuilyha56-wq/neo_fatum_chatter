@@ -27,6 +27,16 @@ def _is_deepseek_model_entry(model_entry: Any) -> bool:
     )
 
 
+def _uses_console_go_reasoning_text(model_entry: Any) -> bool:
+    """判断模型是否走 Console Go 的 reasoning_text 历史协议。"""
+    if not isinstance(model_entry, dict):
+        return False
+
+    provider = str(model_entry.get("api_provider") or "").lower()
+    model_identifier = str(model_entry.get("model_identifier") or "").lower()
+    return provider in {"cli", "opencode"} and "deepseek" in model_identifier
+
+
 def is_deepseek_model_set(model_set: Any) -> bool:
     """判断模型集里是否包含 DeepSeek 条目。"""
     if isinstance(model_set, list):
@@ -52,6 +62,8 @@ def prepare_nfc_model_set(model_set: Any) -> Any:
 
         extra_params["enable_thinking"] = False
         extra_params["thinking"] = {"type": "disabled"}
+        if _uses_console_go_reasoning_text(model_entry):
+            extra_params["reasoning_history_mode"] = "reasoning_text"
         model_entry["extra_params"] = extra_params
 
     return prepared_model_set
@@ -163,7 +175,11 @@ def build_unsent_perception_draft(perceive_text: str) -> str:
 
 
 def rewrite_response_as_unsent_draft(response: Any, perceive_text: str) -> bool:
-    """将自动追加的纯文本响应改写成“未发送草稿”标记。"""
+    """将自动追加的纯文本响应改写成“未发送草稿”标记。
+
+    thinking 模式要求后续请求原样回传 assistant 的推理内容，因此这里只
+    替换可见文本，保留已有 ``ReasoningText`` 片段及其签名元数据。
+    """
     if getattr(response, "call_list", None):
         return False
 
@@ -175,5 +191,11 @@ def rewrite_response_as_unsent_draft(response: Any, perceive_text: str) -> bool:
     if getattr(last_payload, "role", None) != ROLE.ASSISTANT:
         return False
 
-    last_payload.content = [Text(build_unsent_perception_draft(perceive_text))]
+    reasoning_parts = [
+        part for part in last_payload.content if isinstance(part, ReasoningText)
+    ]
+    last_payload.content = [
+        *reasoning_parts,
+        Text(build_unsent_perception_draft(perceive_text)),
+    ]
     return True
