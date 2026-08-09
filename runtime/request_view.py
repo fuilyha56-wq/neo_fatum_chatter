@@ -12,6 +12,8 @@ from typing import Any
 from src.kernel.llm import LLMPayload, ROLE
 from src.kernel.llm.request import LLMRequest
 
+from ..protocol.reasoning_transport import attach_nfc_model_clients
+
 
 @dataclass(slots=True)
 class RequestView:
@@ -46,6 +48,7 @@ class RequestView:
             meta_data=dict(getattr(upper, "meta_data", {}) or {}),
             context_manager=getattr(self.source, "context_manager", None),
         )
+        attach_nfc_model_clients(request)
         request.payloads = list(self.payloads)
         result = await request.send(auto_append_response=auto_append_response, stream=stream)
         if not getattr(result, "_consumed", False):

@@ -43,4 +43,5 @@ def test_prepare_nfc_model_set_uses_reasoning_text_for_cli_deepseek() -> None:
     prepared = prepare_nfc_model_set(model_set)
 
     assert "reasoning_history_mode" not in model_set[0]["extra_params"]
-    assert prepared[0]["extra_params"]["reasoning_history_mode"] == "reasoning_text"
+    assert prepared[0]["extra_params"]["reasoning_history_mode"] is True
+    assert prepared[0]["extra_params"]["thinking"]["enabled"] is False

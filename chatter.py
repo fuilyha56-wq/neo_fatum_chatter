@@ -33,6 +33,10 @@ from src.kernel.llm import LLMContextManager, ReminderSourceSpec
 from .debug.log_formatter import format_prompt_for_log
 from .services.context_sanitizer import prepare_payload_chain_for_send
 from .protocol.perception_retry import apply_perception_followup
+from .protocol.reasoning_transport import (
+    attach_nfc_model_clients,
+    send_with_nfc_model_clients,
+)
 from .protocol.response_normalizer import normalize_response
 from .models import NFC_REPLY, DO_NOTHING
 
@@ -233,6 +237,7 @@ class NeoFatumChatter(BaseChatter):
             context_manager=context_manager,
             stream_id=chat_stream.stream_id,
         )
+        attach_nfc_model_clients(request)
 
         # 系统提示词
         from .prompts.builder import NFCPromptBuilder
@@ -311,7 +316,8 @@ class NeoFatumChatter(BaseChatter):
 
             # auto_append_response=True：先把响应接到 response 链上；
             # 若本轮只是纯文本草稿，会在下方改写成未发送草稿说明。
-            new_response = await response.send(
+            new_response = await send_with_nfc_model_clients(
+                response,
                 auto_append_response=True, stream=False
             )
             await new_response

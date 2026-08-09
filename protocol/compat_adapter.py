@@ -61,9 +61,9 @@ def prepare_nfc_model_set(model_set: Any) -> Any:
             extra_params = dict(extra_params)
 
         extra_params["enable_thinking"] = False
-        extra_params["thinking"] = {"type": "disabled"}
+        extra_params["thinking"] = {"type": "disabled", "enabled": False}
         if _uses_console_go_reasoning_text(model_entry):
-            extra_params["reasoning_history_mode"] = "reasoning_text"
+            extra_params["reasoning_history_mode"] = True
         model_entry["extra_params"] = extra_params
 
     return prepared_model_set
