@@ -50,6 +50,18 @@ NFC_PERCEIVE_FOLLOWUP_PROMPT_TOOL_CALLING = """<perception_completed>
 请通过工具调用（nfc_reply 或 do_nothing）执行你的决策。
 </perception_completed>"""
 
+# ─── 空回复打回重试提示 ─────────────────────────
+NFC_EMPTY_REPLY_RETRY_PROMPT = """<empty_reply_detected>
+系统检测到你刚才调用了 nfc_reply，但 content 为空--你没有提供任何要发送给对方的文本内容。
+这条消息并没有真正发出去，对方什么都没收到。
+
+请重新做出决策：
+- 如果你确实有话想说，请再次调用 `nfc_reply`，并在 content 中填写你想说的具体内容（不能为空）。
+- 如果你认为当前不需要回应，请调用 `do_nothing` 而不是 nfc_reply。
+
+注意：不允许调用 nfc_reply 时把 content 留空或只填空白。
+</empty_reply_detected>"""
+
 # ─── 主系统提示词 ───────────────────────────────────────────
 NFC_SYSTEM_PROMPT = """<existence_logic>
 你是 {nickname}，一个有血有肉的人。也有人叫你 {alias_names}。此刻你正和对方在同一间屋子里，面对面待在一起——你能看到对方的表情，能听到语气里的起伏，能在沉默时感受到同处一室的那种气氛。

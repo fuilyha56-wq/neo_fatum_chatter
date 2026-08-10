@@ -24,14 +24,19 @@ from src.kernel.llm.exceptions import (
 )
 
 from ..debug.log_formatter import log_nfc_result
-from ..parser import coerce_call_list
+from ..parser import coerce_call_list, _remove_failed_tool_calls
+from ..prompts.templates import NFC_EMPTY_REPLY_RETRY_PROMPT
 from ..protocol.compat_adapter import prepare_nfc_model_set
 from ..protocol.decision_parser import parse_response_decision
 from ..services import (
     ProactiveService,
     TimeoutService,
 )
-from ..services.context_sanitizer import heal_orphan_tool_results
+from ..services.context_sanitizer import (
+    close_pending_tool_chain,
+    heal_orphan_tool_results,
+    prepare_payload_chain_for_send,
+)
 from ..services.perception_extractor import extract_reply_from_perception
 from .request_view import build_request_view, strip_transient_payloads
 from .turn_controller import (
@@ -118,6 +123,8 @@ class _LoopState:
     has_pending_tool_results: bool = False
     is_final_timeout: bool = False
     history_images_injected: bool = False
+    empty_reply_retries: int = 0
+    empty_reply_retries: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +201,100 @@ class _LLMErrorOutcome:
         self.should_continue = should_continue
         self.failure = failure
         self.retry_delay = retry_delay
+
+
+def _collect_empty_reply_call_ids(
+    response: Any,
+    decision: Any,
+) -> set[str]:
+    """收集本轮 nfc_reply 中 content 为空的 tool_call id。
+
+    用于空回复打回重试时，从 response 链中清理这些无效的 tool_call
+    及其对应的 tool_result，避免下一轮 LLM 请求上下文里残留空调用。
+
+    Args:
+        response: LLM 响应链对象。
+        decision: 已构建的 Decision 对象（含 actions 列表）。
+
+    Returns:
+        需要清理的 call_id 集合。
+    """
+    from ..models import NFC_REPLY
+    from ..protocol.call_resolver import normalize_call_name
+
+    empty_ids: set[str] = set()
+    call_list = coerce_call_list(response)
+
+    # 构建按 call_id -> content 是否为空 的映射
+    for call in call_list:
+        normalized_name = normalize_call_name(getattr(call, "name", ""))
+        if normalized_name != NFC_REPLY:
+            continue
+
+        args = dict(call.args) if isinstance(call.args, dict) else {}
+        raw_content = args.get("content")
+
+        content_is_empty = (
+            raw_content is None
+            or raw_content == []
+            or (isinstance(raw_content, str) and not raw_content.strip())
+            or (
+                isinstance(raw_content, list)
+                and not any(
+                    str(item).strip()
+                    for item in raw_content
+                    if item is not None
+                )
+            )
+        )
+        if content_is_empty:
+            call_id = getattr(call, "id", None)
+            if call_id:
+                empty_ids.add(str(call_id))
+
+    return empty_ids
+
+
+def _purge_empty_reply_artifacts(
+    response: Any,
+    empty_call_ids: set[str],
+) -> None:
+    """从 response 链中移除空 nfc_reply 的 tool_call 及其 tool_result。
+
+    Args:
+        response: LLM 响应链对象。
+        empty_call_ids: 需要清理的 call_id 集合。
+    """
+    if not empty_call_ids:
+        return
+
+    from src.kernel.llm import ToolResult
+
+    # 先复用 parser 的清理逻辑移除 assistant payload 中的 ToolCall
+    _remove_failed_tool_calls(response, empty_call_ids)
+
+    # 再移除对应的 TOOL_RESULT payload
+    payloads = getattr(response, "payloads", None)
+    if not isinstance(payloads, list):
+        return
+
+    for payload in payloads:
+        if getattr(payload, "role", None) != ROLE.TOOL_RESULT:
+            continue
+        content = getattr(payload, "content", None)
+        if not isinstance(content, list):
+            continue
+        cleaned_content = [
+            part
+            for part in content
+            if not (
+                isinstance(part, ToolResult)
+                and part.call_id is not None
+                and str(part.call_id) in empty_call_ids
+            )
+        ]
+        if len(cleaned_content) != len(content):
+            payload.content = cleaned_content
 
 
 def _handle_llm_error(
@@ -612,6 +713,100 @@ async def execute_orchestrator(
             logger.warning(
                 "决策完成: 无有效动作 (has_meaningful_action=False)"
             )
+
+        # ── 空回复打回重试 ──
+        # 模型调用了 nfc_reply 但 content 为空（空包弹），且感知草稿
+        # 回填也未能补上有效文本时，注入提示要求模型重新生成。
+        if (
+            decision.has_reply_action
+            and not decision.visible_reply_segments
+            and loop_state.empty_reply_retries < config.general.max_empty_reply_retries
+            and config.general.max_empty_reply_retries > 0
+        ):
+            loop_state.empty_reply_retries += 1
+            logger.warning(
+                f"[NFC] 检测到空回复（nfc_reply content 为空），"
+                f"打回重试第 {loop_state.empty_reply_retries}/"
+                f"{config.general.max_empty_reply_retries} 次"
+            )
+
+            # 清理本轮空的 nfc_reply tool_call 及其 tool_result
+            empty_call_ids = _collect_empty_reply_call_ids(response, decision)
+            if empty_call_ids:
+                _purge_empty_reply_artifacts(response, empty_call_ids)
+
+            # 闭合尾部可能残留的 tool_result 链
+            close_pending_tool_chain(response, reason="空回复重试")
+
+            # 注入重试提示，要求模型重新生成有效回复
+            response.add_payload(LLMPayload(ROLE.USER, Text(NFC_EMPTY_REPLY_RETRY_PROMPT)))
+            prepare_payload_chain_for_send(response, reason="空回复重试发送前")
+
+            try:
+                response = await chatter._send_with_perceive_loop(
+                    response,
+                    config.general.max_compat_retries,
+                )
+            except (LLMAuthenticationError, LLMRateLimitError, LLMTimeoutError,
+                    LLMTokenLimitError, LLMAPIError, LLMError) as exc:
+                outcome = _handle_llm_error(
+                    exc,
+                    config=config,
+                    consecutive_llm_failures=loop_state.consecutive_llm_failures,
+                )
+                loop_state.extra_payload = None
+                loop_state.consecutive_llm_failures += 1
+                if outcome.should_break:
+                    await chatter._save_session(session)
+                    if outcome.failure:
+                        yield outcome.failure
+                    break
+                if outcome.should_continue and outcome.retry_delay > 0:
+                    await asyncio.sleep(outcome.retry_delay)
+                continue
+            except Exception as exc:
+                logger.error(f"空回复重试 LLM 请求失败: {repr(exc)}", exc_info=True)
+                loop_state.extra_payload = None
+                await chatter._save_session(session)
+                yield Failure("空回复重试 LLM 请求失败", exc)
+                break
+
+            loop_state.consecutive_llm_failures = 0
+            heal_orphan_tool_results(response, where="post-empty-reply-retry")
+            loop_state.extra_payload = None
+
+            # 重新解析决策
+            trigger_msg = unread_msgs[-1] if unread_msgs else None
+            if trigger_msg is None:
+                trigger_msg = await chatter._get_virtual_trigger_message()
+            decision = await parse_response_decision(
+                response,
+                usable_map,
+                trigger_msg,
+                config,
+                run_tool_call_fn=chatter.run_tool_call,
+                pre_execute_hook=lambda result: log_nfc_result(result, config),
+            )
+
+            if decision.has_reply_action:
+                reply_preview = (
+                    decision.visible_reply_segments[0][:60]
+                    if decision.visible_reply_segments
+                    else "(无可见文本)"
+                )
+                logger.info(
+                    f"空回复重试后决策完成: has_reply=True, "
+                    f"segments={len(decision.visible_reply_segments)}, "
+                    f"preview={reply_preview!r}"
+                )
+            elif not decision.has_meaningful_action:
+                logger.warning(
+                    "空回复重试后决策完成: 无有效动作 (has_meaningful_action=False)"
+                )
+
+        # 重试成功或达到上限后重置计数器
+        if decision.has_reply_action and decision.visible_reply_segments:
+            loop_state.empty_reply_retries = 0
 
         if decision.proactive_schedule is not None:
             try:

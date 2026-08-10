@@ -83,6 +83,14 @@ class NFCConfig(BaseConfig):
                 "对应 model.toml 中的 task 名称。"
             ),
         )
+        max_empty_reply_retries: int = Field(
+            default=2,
+            description=(
+                "模型调用 nfc_reply 但 content 为空（空包弹）时的最大重试次数。"
+                "NFC 会注入提示要求模型重新生成有效回复内容后再次发送。"
+                "0 表示不重试，直接放行空回复（本轮不发任何消息）。"
+            ),
+        )
         max_consecutive_llm_failures: int = Field(
             default=15,
             description=(
