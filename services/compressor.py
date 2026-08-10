@@ -62,6 +62,10 @@ async def compress_history(
         config: NFC 配置
         chat_stream: 当前聊天流（用于 system_prompt 构建）
     """
+    started_context_cleared_at = float(
+        getattr(session, "context_cleared_at", 0.0) or 0.0
+    )
+
     # 立即标记压缩时间，防止异步并发重复触发
     session.last_compress_at = time.time()
     if session_store is not None:
@@ -70,7 +74,10 @@ async def compress_history(
 
     stream_id = session.stream_id
     days = config.prompt.compress_days_window
-    since_ts = time.time() - days * 86400
+    since_ts = max(
+        time.time() - days * 86400,
+        started_context_cleared_at,
+    )
 
     # ── 1. 从 DB 读取时间窗口内的历史消息 ──
     # 私聊流消息量有限，以大上限一次性拉取后按时间过滤，无需分页。
@@ -184,20 +191,42 @@ async def compress_history(
     # 同时把 summary 三个字段同步回入参 session，让当前 execute 循环内的
     # _hot_update_summary 能立即读到新值。
     now_ts = time.time()
-    session.history_summary = summary
-    session.last_compress_at = now_ts
-    session.compress_round_count = 0
     if session_store is not None:
         async with session_store.lock(stream_id):
             latest_session = await session_store.get(stream_id)
             if latest_session is None:
                 # session 被并发删除，回退保存入参
+                if session.context_cleared_at > started_context_cleared_at:
+                    logger.info(
+                        f"[NFC] 摘要结果因上下文已清空而丢弃：流 {stream_id}"
+                    )
+                    return
+                session.history_summary = summary
+                session.last_compress_at = now_ts
+                session.compress_round_count = 0
                 await session_store.save(session)
             else:
+                if latest_session.context_cleared_at > started_context_cleared_at:
+                    logger.info(
+                        f"[NFC] 摘要结果因上下文已清空而丢弃：流 {stream_id}"
+                    )
+                    return
                 latest_session.history_summary = summary
                 latest_session.last_compress_at = now_ts
                 latest_session.compress_round_count = 0
                 await session_store.save(latest_session)
+                session.history_summary = summary
+                session.last_compress_at = now_ts
+                session.compress_round_count = 0
+    else:
+        if session.context_cleared_at > started_context_cleared_at:
+            logger.info(
+                f"[NFC] 摘要结果因上下文已清空而丢弃：流 {stream_id}"
+            )
+            return
+        session.history_summary = summary
+        session.last_compress_at = now_ts
+        session.compress_round_count = 0
     logger.info(
         f"[NFC] 近期记忆压缩完成：流 {stream_id}，"
         f"覆盖 {len(formatted_lines)} 条消息，"

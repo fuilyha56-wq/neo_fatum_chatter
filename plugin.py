@@ -23,6 +23,7 @@ from .actions.update_habit import UpdateHabitAction
 from .chatter import NeoFatumChatter
 from .config import NFCConfig
 from .handlers.proactive_handler import ProactiveHandler
+from .handlers.context_clear_handler import NFCContextClearHandler
 from .handlers.request_snapshot_handler import NFCRequestSnapshotHandler
 from .handlers.voice_call_history_handler import VoiceCallHistoryHandler
 from .session import NFCSessionStore
@@ -38,7 +39,7 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.5.10"
+    plugin_version = "2.5.11"
     plugin_author = "Lycoris"
     plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
     configs = [NFCConfig]
@@ -314,6 +315,7 @@ class NFCPlugin(BasePlugin):
             RemoveHabitAction,
             SetProactiveEnabledAction,
             QueryProactiveStatusAction,
+            NFCContextClearHandler,
             NFCRequestSnapshotHandler,
             ProactiveHandler,
             VoiceCallHistoryHandler,

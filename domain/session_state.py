@@ -143,6 +143,10 @@ class NFCSession:
     last_compress_at: float = 0.0     # 上次触发压缩的时间戳
     compress_round_count: int = 0     # 距上次压缩已完成的对话轮次数
 
+    # NFC 自身的上下文清空水位。摘要压缩只允许读取该时间点之后的消息，
+    # 防止主程序清空上下文后又从保留的数据库消息中恢复旧记忆。
+    context_cleared_at: float = 0.0
+
     # 显式场景状态：只记录有证据支撑的场景信息，默认 unknown。
     scene_state: SceneState = field(default_factory=SceneState)
 
@@ -427,6 +431,32 @@ class NFCSession:
         self.frozen_narrative = ""
         self.frozen_narrative_cutoff_ts = 0.0
 
+    def reset_context(self, cleared_at: float | None = None) -> None:
+        """清空会回灌模型的会话上下文，同时保留长期用户偏好。"""
+        reset_time = float(cleared_at) if cleared_at is not None else time.time()
+
+        self.clear_chain()
+        self.mental_log.clear()
+        self.request_snapshot = {}
+        self.history_summary = ""
+        self.last_compress_at = 0.0
+        self.compress_round_count = 0
+        self.context_cleared_at = reset_time
+        self.scene_state = SceneState()
+        self.mood_history = []
+        self.pending_proactive_context = ""
+        self.suppressed_messages = []
+        self.waiting_config.reset()
+        self.consecutive_timeout_count = 0
+        self.last_activity_at = reset_time
+        self.last_user_message_at = None
+        self.scheduled_proactive_at = None
+        self.scheduled_proactive_reason = ""
+        self.total_interactions = 0
+
+        if hasattr(self, "_nfc_request_snapshot_restored"):
+            delattr(self, "_nfc_request_snapshot_restored")
+
     def add_interrupt_event(self, interrupt_msgs: list[Any]) -> MentalLogEntry:
         """记录用户打断事件到活动流。
 
@@ -482,6 +512,7 @@ class NFCSession:
             "history_summary": self.history_summary,
             "last_compress_at": self.last_compress_at,
             "compress_round_count": self.compress_round_count,
+            "context_cleared_at": self.context_cleared_at,
             "scene_state": self.scene_state.to_dict(),
             "mood_history": self.mood_history,
             "activity_hours": self.activity_hours,
@@ -546,6 +577,7 @@ class NFCSession:
         session.history_summary = data.get("history_summary", "")
         session.last_compress_at = float(data.get("last_compress_at", 0.0))
         session.compress_round_count = int(data.get("compress_round_count", 0))
+        session.context_cleared_at = float(data.get("context_cleared_at", 0.0))
         session.scene_state = SceneState.from_dict(data.get("scene_state", {}))
         # 情绪轨迹
         raw_mood = data.get("mood_history", [])
