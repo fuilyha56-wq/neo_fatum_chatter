@@ -162,8 +162,27 @@ def heal_orphan_tool_results(response: Any, *, where: str = "发送前") -> bool
 
         missing = expected_ids - seen_ids
         if missing:
-            # 尾部未闭合 = 本轮尚未执行，保留以等待 run_tool_call 回写 tool_result
             is_tail = cursor >= len(payloads)
+            if is_tail and seen_ids:
+                retained_content = [
+                    part
+                    for part in getattr(payload, "content", [])
+                    if not isinstance(part, ToolCall)
+                    or (part.id is not None and str(part.id) in seen_ids)
+                ]
+                if any(isinstance(part, ToolCall) for part in retained_content):
+                    payload.content = retained_content
+                    cleaned.append(payload)
+                    cleaned.extend(result_payloads)
+                    changed = True
+                    logger.warning(
+                        f"[NFC] {where}: 尾部工具组仅部分完成，删除缺少结果的 "
+                        f"tool_calls missing={sorted(missing)}"
+                    )
+                    index = cursor
+                    continue
+
+            # 尾部完全未执行 = 本轮尚未开始，保留以等待 run_tool_call 回写结果
             if is_tail:
                 logger.debug(
                     f"[NFC] {where}: 保留尾部未闭合 assistant tool_calls idx={index}, "
@@ -288,6 +307,6 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
 def prepare_payload_chain_for_send(response: Any, *, reason: str = "发送前") -> bool:
     """发送 LLM 前统一整理 payload 链。"""
     healed = heal_orphan_tool_results(response, where=reason)
-    closed = close_pending_tool_chain(response, reason=reason)
     sanitized = sanitize_payload_chain(response, reason=reason)
+    closed = close_pending_tool_chain(response, reason=reason)
     return healed or closed or sanitized

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from copy import deepcopy
 from typing import Any
 
@@ -89,7 +90,10 @@ def try_parse_tool_call_compat_response(response: Any) -> bool:
     response.message = parsed_message
     response.call_list = [
         ToolCall(
-            id=str(call.get("id") or f"NFC_compat_call_{index}"),
+            id=str(
+                call.get("id")
+                or f"NFC_compat_call_{uuid.uuid4().hex[:12]}_{index}"
+            ),
             name=call.get("name", ""),
             args=call.get("args", {}),
         )

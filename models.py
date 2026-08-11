@@ -51,6 +51,12 @@ class ToolCallResult:
     has_info_tool: bool = False
     """是否包含 agent-* / tool-* 类工具调用（有实际返回值，需立即续轮让 LLM 看到结果）"""
 
+    reply_execution_failed: bool = False
+    """nfc_reply 是否因发送链路失败而未完整执行。"""
+
+    execution_success_by_call_id: dict[str, bool] = field(default_factory=dict)
+    """每个工具调用的 execute 成功状态。"""
+
     @property
     def has_meaningful_action(self) -> bool:
         """是否包含任何有效动作（回复、do_nothing 或第三方工具）。"""

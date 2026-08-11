@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.llm import LLMPayload
 
-from .context_sanitizer import close_pending_tool_chain
+from .context_sanitizer import prepare_payload_chain_for_send
 
 from ..thinker.timeout_handler import TimeoutHandler
 
@@ -59,4 +59,4 @@ class TimeoutService:
     @staticmethod
     def _close_pending_tool_chain(response: Any) -> None:
         """必要时插入 assistant 桥接 payload，闭合 tool_result 链。"""
-        close_pending_tool_chain(response, reason="超时触发")
+        prepare_payload_chain_for_send(response, reason="超时触发")

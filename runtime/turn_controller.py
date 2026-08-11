@@ -13,7 +13,7 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 from ..domain.turn_trigger import TurnTrigger, classify_turn_trigger
 from ..models import WaitingConfig
 from ..services import SummaryService
-from ..services.context_sanitizer import close_pending_tool_chain, prepare_payload_chain_for_send
+from ..services.context_sanitizer import prepare_payload_chain_for_send
 from .message_buffer import dedupe_messages_by_id
 
 if TYPE_CHECKING:
@@ -217,7 +217,7 @@ async def prepare_turn_input(
             config=config,
         )
 
-        close_pending_tool_chain(response, reason="新消息到达")
+        prepare_payload_chain_for_send(response, reason="新消息到达")
 
         upserted = False
         if (
@@ -421,7 +421,7 @@ async def _build_suppressed_batch_turn(
         config=config,
     )
 
-    close_pending_tool_chain(response, reason="抑制期消息合并到达")
+    prepare_payload_chain_for_send(response, reason="抑制期消息合并到达")
 
     upserted = False
     if (
@@ -525,14 +525,9 @@ async def commit_turn_decision(
     if decision.mood:
         session.record_mood(decision.mood)
 
-    # 优先用实际发送的可见回复（decision.reply_text），fallback 才是 response.message。
-    # 原因：tool call 续轮路径下，模型可能只输出 tool_call 无 Text，response.message 为空；
-    # 而 decision.visible_reply_segments 由 parser 从 nfc_reply content 提取得来，
-    # 是真正发给用户的内容。若优先取 response.message，会写入空字符串或 reasoning 文本，
-    # 导致 chain 丢失 assistant 条目或写入错误文本。
+    # 只持久化实际发送成功的可见回复。response.message 可能只是感知草稿或
+    # 未形成工具决策的模型文本，仍记录在 raw_response，但不能视为已发给用户。
     assistant_text = decision.reply_text.strip()
-    if not assistant_text:
-        assistant_text = (getattr(response, "message", "") or "").strip()
     if pre_send_user_text and assistant_text:
         if chain_user_pre_saved:
             session.update_chain(
@@ -604,6 +599,10 @@ async def commit_turn_decision(
         decision.wait_seconds,
         session.consecutive_timeout_count,
     )
+
+    if decision.reply_execution_failed and not assistant_text:
+        logger.warning("回复完全发送失败，取消等待以便及时处理后续消息")
+        wait_seconds = 0
 
     if is_final_timeout and wait_seconds > 0:
         logger.info("最后一次超时决策完成，强制结束等待")

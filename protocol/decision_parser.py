@@ -66,7 +66,11 @@ def build_decision(result: ToolCallResult, response: Any) -> Decision:
             )
         )
 
-        if normalized_name == "schedule_proactive":
+        call_id = str(getattr(call, "id", "") or "")
+        if (
+            normalized_name == "schedule_proactive"
+            and result.execution_success_by_call_id.get(call_id, False)
+        ):
             delay_raw = args.get("delay_minutes", 30)
             try:
                 delay_minutes = float(delay_raw)
@@ -85,6 +89,7 @@ def build_decision(result: ToolCallResult, response: Any) -> Decision:
         actions=list(result.actions),
         visible_reply_segments=visible_reply_segments,
         has_reply_action=result.has_reply,
+        reply_execution_failed=result.reply_execution_failed,
         chose_silence=result.has_do_nothing and not result.has_reply,
         has_meaningful_action=result.has_meaningful_action,
         has_info_tool_calls=result.has_info_tool,

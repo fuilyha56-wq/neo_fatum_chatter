@@ -24,6 +24,7 @@ from src.kernel.llm.exceptions import (
 )
 
 from ..debug.log_formatter import log_nfc_result
+from ..domain.decision import Decision
 from ..parser import coerce_call_list, _remove_failed_tool_calls
 from ..prompts.templates import NFC_EMPTY_REPLY_RETRY_PROMPT
 from ..protocol.compat_adapter import prepare_nfc_model_set
@@ -33,7 +34,6 @@ from ..services import (
     TimeoutService,
 )
 from ..services.context_sanitizer import (
-    close_pending_tool_chain,
     heal_orphan_tool_results,
     prepare_payload_chain_for_send,
 )
@@ -47,6 +47,7 @@ from .turn_controller import (
 
 if TYPE_CHECKING:
     from ..chatter import NeoFatumChatter
+    from ..config import NFCConfig
 
 
 logger = get_logger("NFC_chatter")
@@ -123,7 +124,6 @@ class _LoopState:
     has_pending_tool_results: bool = False
     is_final_timeout: bool = False
     history_images_injected: bool = False
-    empty_reply_retries: int = 0
     empty_reply_retries: int = 0
 
 
@@ -270,31 +270,51 @@ def _purge_empty_reply_artifacts(
 
     from src.kernel.llm import ToolResult
 
-    # 先复用 parser 的清理逻辑移除 assistant payload 中的 ToolCall
-    _remove_failed_tool_calls(response, empty_call_ids)
+    # 只清理最新工具回合，避免跨轮 call_id 冲突时误删历史工具链。
+    turn_location = _remove_failed_tool_calls(response, empty_call_ids)
+    if turn_location is None:
+        return
+    turn_index, assistant_retained = turn_location
 
-    # 再移除对应的 TOOL_RESULT payload
+    call_list = coerce_call_list(response)
+    response.call_list = [
+        call
+        for call in call_list
+        if getattr(call, "id", None) is None
+        or str(getattr(call, "id")) not in empty_call_ids
+    ]
+
+    # 再移除该工具回合紧随的对应 TOOL_RESULT，历史回合保持不变。
     payloads = getattr(response, "payloads", None)
     if not isinstance(payloads, list):
         return
 
-    for payload in payloads:
-        if getattr(payload, "role", None) != ROLE.TOOL_RESULT:
+    cursor = turn_index + (1 if assistant_retained else 0)
+    cleaned_payloads = list(payloads[:cursor])
+    while cursor < len(payloads):
+        payload = payloads[cursor]
+        role = getattr(payload, "role", None)
+        if role in {ROLE.SYSTEM, ROLE.TOOL}:
+            cleaned_payloads.append(payload)
+            cursor += 1
             continue
+        if role != ROLE.TOOL_RESULT:
+            break
+
         content = getattr(payload, "content", None)
-        if not isinstance(content, list):
-            continue
-        cleaned_content = [
+        remaining_results = [
             part
-            for part in content
-            if not (
-                isinstance(part, ToolResult)
-                and part.call_id is not None
-                and str(part.call_id) in empty_call_ids
-            )
+            for part in content or []
+            if isinstance(part, ToolResult)
+            and part.call_id is not None
+            and str(part.call_id) not in empty_call_ids
         ]
-        if len(cleaned_content) != len(content):
-            payload.content = cleaned_content
+        if remaining_results:
+            payload.content = remaining_results
+            cleaned_payloads.append(payload)
+        cursor += 1
+
+    response.payloads = cleaned_payloads + payloads[cursor:]
 
 
 def _handle_llm_error(
@@ -364,6 +384,51 @@ def _handle_llm_error(
     return _LLMErrorOutcome(
         should_break=True,
         failure=Failure("LLM 请求失败", exc),
+    )
+
+
+async def _build_plain_text_fallback_decision(
+    chatter: NeoFatumChatter,
+    response: Any,
+    config: NFCConfig,
+    unread_msgs: list[Any],
+) -> Decision | None:
+    """提取并发送无 tool call 的纯文本，成功后构造等效 Decision。"""
+    fallback_text = (getattr(response, "message", "") or "").strip()
+    if not fallback_text:
+        return None
+
+    logger.warning(
+        f"[NFC] 感知阶段耗尽重试仍无工具调用，交由 sub actor 提取回复: "
+        f"{fallback_text[:80]}{'...' if len(fallback_text) > 80 else ''}"
+    )
+    extracted = await extract_reply_from_perception(
+        fallback_text,
+        model_task=config.general.perception_extract_task,
+    )
+    reply_text = (extracted or "").strip()
+    if not reply_text:
+        logger.debug("[NFC] sub actor 未提取到有效内容，跳过发送")
+        return None
+
+    logger.info(
+        f"[NFC] sub actor 提取结果: "
+        f"{reply_text[:80]}{'...' if len(reply_text) > 80 else ''}"
+    )
+    trigger_msg = unread_msgs[-1] if unread_msgs else None
+    if trigger_msg is None:
+        trigger_msg = await chatter._get_virtual_trigger_message()
+    sent = await chatter._execute_reply(reply_text, config, trigger_msg, "")
+    if not sent:
+        logger.warning("[NFC] 纯文本 fallback 发送失败，不提交为可见回复")
+        return None
+
+    return Decision(
+        thought="(兜底：模型未输出工具调用，纯文本直接发送)",
+        visible_reply_segments=[reply_text],
+        has_reply_action=True,
+        has_meaningful_action=True,
+        actions=[{"type": "nfc_reply", "content": [reply_text]}],
     )
 
 
@@ -625,78 +690,26 @@ async def execute_orchestrator(
         elif getattr(response, "message", ""):
             logger.debug("[NFC] 本轮无 tool call，等待标准化器判定是否需要重试")
 
-        # ── 兜底：感知阶段耗尽重试仍无工具调用时，用 sub actor 提取回复 ──
+        decision = None
         if not call_list:
-            fallback_text = (getattr(response, "message", "") or "").strip()
-            if fallback_text:
-                logger.warning(
-                    f"[NFC] 感知阶段耗尽重试仍无工具调用，交由 sub actor 提取回复: "
-                    f"{fallback_text[:80]}{'...' if len(fallback_text) > 80 else ''}"
-                )
-                extracted = await extract_reply_from_perception(
-                    fallback_text,
-                    model_task=config.general.perception_extract_task,
-                )
-                if not extracted:
-                    logger.debug("[NFC] sub actor 未提取到有效内容，跳过发送")
-                else:
-                    reply_text = extracted
-                    logger.info(
-                        f"[NFC] sub actor 提取结果: "
-                        f"{reply_text[:80]}{'...' if len(reply_text) > 80 else ''}"
-                    )
-
-                    trigger_msg = unread_msgs[-1] if unread_msgs else None
-                    if trigger_msg is None:
-                        trigger_msg = await chatter._get_virtual_trigger_message()
-                    sent = await chatter._execute_reply(
-                        reply_text, config, trigger_msg, ""
-                    )
-                    if sent:
-                        # 构造等效的 decision 以正确更新 session
-                        from ..domain.decision import Decision
-                        decision = Decision(
-                            thought="(兜底：模型未输出工具调用，纯文本直接发送)",
-                            visible_reply_segments=[reply_text],
-                            has_reply_action=True,
-                            has_meaningful_action=True,
-                            actions=[{"type": "nfc_reply", "content": [reply_text]}],
-                        )
-                        turn_control = await commit_turn_decision(
-                            chatter,
-                            decision,
-                            response,
-                            session,
-                            config,
-                            prompt_builder,
-                            chat_stream,
-                            loop_state.pre_send_user_text,
-                            loop_state.last_user_ts,
-                            loop_state.chain_user_pre_saved,
-                            loop_state.is_final_timeout,
-                        )
-                        loop_state.is_final_timeout = turn_control.is_final_timeout
-                        if turn_control.has_pending_tool_results:
-                            loop_state.has_pending_tool_results = True
-                        if turn_control.next_signal is not None:
-                            yield turn_control.next_signal
-                        if turn_control.return_after_yield:
-                            return
-                        if turn_control.continue_loop:
-                            continue
-                        return
-
-        trigger_msg = unread_msgs[-1] if unread_msgs else None
-        if trigger_msg is None:
-            trigger_msg = await chatter._get_virtual_trigger_message()
-        decision = await parse_response_decision(
-            response,
-            usable_map,
-            trigger_msg,
-            config,
-            run_tool_call_fn=chatter.run_tool_call,
-            pre_execute_hook=lambda result: log_nfc_result(result, config),
-        )
+            decision = await _build_plain_text_fallback_decision(
+                chatter,
+                response,
+                config,
+                unread_msgs,
+            )
+        if decision is None:
+            trigger_msg = unread_msgs[-1] if unread_msgs else None
+            if trigger_msg is None:
+                trigger_msg = await chatter._get_virtual_trigger_message()
+            decision = await parse_response_decision(
+                response,
+                usable_map,
+                trigger_msg,
+                config,
+                run_tool_call_fn=chatter.run_tool_call,
+                pre_execute_hook=lambda result: log_nfc_result(result, config),
+            )
 
         if decision.has_reply_action:
             reply_preview = (
@@ -717,9 +730,10 @@ async def execute_orchestrator(
         # ── 空回复打回重试 ──
         # 模型调用了 nfc_reply 但 content 为空（空包弹），且感知草稿
         # 回填也未能补上有效文本时，注入提示要求模型重新生成。
-        if (
+        while (
             decision.has_reply_action
             and not decision.visible_reply_segments
+            and not decision.reply_execution_failed
             and loop_state.empty_reply_retries < config.general.max_empty_reply_retries
             and config.general.max_empty_reply_retries > 0
         ):
@@ -735,58 +749,94 @@ async def execute_orchestrator(
             if empty_call_ids:
                 _purge_empty_reply_artifacts(response, empty_call_ids)
 
-            # 闭合尾部可能残留的 tool_result 链
-            close_pending_tool_chain(response, reason="空回复重试")
-
             # 注入重试提示，要求模型重新生成有效回复
             response.add_payload(LLMPayload(ROLE.USER, Text(NFC_EMPTY_REPLY_RETRY_PROMPT)))
             prepare_payload_chain_for_send(response, reason="空回复重试发送前")
 
-            try:
-                response = await chatter._send_with_perceive_loop(
-                    response,
-                    config.general.max_compat_retries,
-                )
-            except (LLMAuthenticationError, LLMRateLimitError, LLMTimeoutError,
-                    LLMTokenLimitError, LLMAPIError, LLMError) as exc:
-                outcome = _handle_llm_error(
-                    exc,
-                    config=config,
-                    consecutive_llm_failures=loop_state.consecutive_llm_failures,
-                )
-                loop_state.extra_payload = None
-                loop_state.consecutive_llm_failures += 1
-                if outcome.should_break:
-                    await chatter._save_session(session)
-                    if outcome.failure:
-                        yield outcome.failure
+            while True:
+                try:
+                    response = await chatter._send_with_perceive_loop(
+                        response,
+                        config.general.max_compat_retries,
+                    )
                     break
-                if outcome.should_continue and outcome.retry_delay > 0:
-                    await asyncio.sleep(outcome.retry_delay)
-                continue
-            except Exception as exc:
-                logger.error(f"空回复重试 LLM 请求失败: {repr(exc)}", exc_info=True)
-                loop_state.extra_payload = None
-                await chatter._save_session(session)
-                yield Failure("空回复重试 LLM 请求失败", exc)
-                break
+                except (LLMAuthenticationError, LLMRateLimitError, LLMTimeoutError,
+                        LLMTokenLimitError, LLMAPIError, LLMError) as exc:
+                    outcome = _handle_llm_error(
+                        exc,
+                        config=config,
+                        consecutive_llm_failures=loop_state.consecutive_llm_failures,
+                    )
+                    loop_state.extra_payload = None
+                    loop_state.consecutive_llm_failures += 1
+                    if outcome.should_break:
+                        await chatter._save_session(session)
+                        if outcome.failure:
+                            yield outcome.failure
+                        return
+
+                    failure_limit = config.general.max_consecutive_llm_failures
+                    if (
+                        failure_limit > 0
+                        and loop_state.consecutive_llm_failures >= failure_limit
+                    ):
+                        logger.error(
+                            "连续 LLM 失败已达上限 "
+                            f"({loop_state.consecutive_llm_failures}/{failure_limit})，"
+                            "终止空回复重试"
+                        )
+                        await chatter._save_session(session)
+                        yield Failure("LLM 连续失败次数超限", exc)
+                        return
+
+                    if outcome.should_continue:
+                        if outcome.retry_delay > 0:
+                            await asyncio.sleep(outcome.retry_delay)
+                        elif isinstance(exc, LLMTimeoutError):
+                            await asyncio.sleep(
+                                min(
+                                    2.0
+                                    ** min(loop_state.consecutive_llm_failures, 4),
+                                    30.0,
+                                )
+                            )
+                        continue
+                    return
+                except Exception as exc:
+                    logger.error(
+                        f"空回复重试 LLM 请求失败: {repr(exc)}",
+                        exc_info=True,
+                    )
+                    loop_state.extra_payload = None
+                    await chatter._save_session(session)
+                    yield Failure("空回复重试 LLM 请求失败", exc)
+                    return
 
             loop_state.consecutive_llm_failures = 0
             heal_orphan_tool_results(response, where="post-empty-reply-retry")
             loop_state.extra_payload = None
 
-            # 重新解析决策
-            trigger_msg = unread_msgs[-1] if unread_msgs else None
-            if trigger_msg is None:
-                trigger_msg = await chatter._get_virtual_trigger_message()
-            decision = await parse_response_decision(
-                response,
-                usable_map,
-                trigger_msg,
-                config,
-                run_tool_call_fn=chatter.run_tool_call,
-                pre_execute_hook=lambda result: log_nfc_result(result, config),
-            )
+            retry_call_list = coerce_call_list(response)
+            decision = None
+            if not retry_call_list:
+                decision = await _build_plain_text_fallback_decision(
+                    chatter,
+                    response,
+                    config,
+                    unread_msgs,
+                )
+            if decision is None:
+                trigger_msg = unread_msgs[-1] if unread_msgs else None
+                if trigger_msg is None:
+                    trigger_msg = await chatter._get_virtual_trigger_message()
+                decision = await parse_response_decision(
+                    response,
+                    usable_map,
+                    trigger_msg,
+                    config,
+                    run_tool_call_fn=chatter.run_tool_call,
+                    pre_execute_hook=lambda result: log_nfc_result(result, config),
+                )
 
             if decision.has_reply_action:
                 reply_preview = (

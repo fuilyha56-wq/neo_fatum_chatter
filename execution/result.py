@@ -7,7 +7,12 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from typing import Any
+
+
+_TOOL_RESULT_KIND = "nfc_reply_execution"
 
 
 @dataclass(slots=True)
@@ -29,8 +34,59 @@ class ExecutionResult:
     reason: str = ""
     stripped_metadata: bool = False
     stripped_thinking: bool = False
+    failure_kind: str = ""
 
     @property
     def has_visible_output(self) -> bool:
         """是否有任何段落真的发到了对方。"""
         return bool(self.sent_segments)
+
+    def to_tool_result(self) -> str:
+        """编码成可写入 ToolResult 的稳定 JSON 文本。"""
+        return json.dumps(
+            {
+                "kind": _TOOL_RESULT_KIND,
+                "sent_segments": list(self.sent_segments),
+                "attempted_segments": self.attempted_segments,
+                "failed": self.failed,
+                "failure_kind": self.failure_kind,
+                "reason": self.reason,
+                "stripped_metadata": self.stripped_metadata,
+                "stripped_thinking": self.stripped_thinking,
+            },
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_tool_result(cls, value: Any) -> ExecutionResult | None:
+        """从 ToolResult 文本恢复回复执行摘要，非 NFC 结果返回 None。"""
+        if not isinstance(value, str):
+            return None
+
+        raw = value.strip()
+        failure_prefix = "执行失败:"
+        if raw.startswith(failure_prefix):
+            raw = raw[len(failure_prefix):].strip()
+
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        if not isinstance(data, dict) or data.get("kind") != _TOOL_RESULT_KIND:
+            return None
+
+        raw_segments = data.get("sent_segments", [])
+        sent_segments = (
+            [str(segment) for segment in raw_segments]
+            if isinstance(raw_segments, list)
+            else []
+        )
+        return cls(
+            sent_segments=sent_segments,
+            attempted_segments=int(data.get("attempted_segments", 0) or 0),
+            failed=bool(data.get("failed", False)),
+            failure_kind=str(data.get("failure_kind", "") or ""),
+            reason=str(data.get("reason", "") or ""),
+            stripped_metadata=bool(data.get("stripped_metadata", False)),
+            stripped_thinking=bool(data.get("stripped_thinking", False)),
+        )

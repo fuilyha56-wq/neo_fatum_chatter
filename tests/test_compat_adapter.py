@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from neo_fatum_chatter.protocol.compat_adapter import (
     prepare_nfc_model_set,
     rewrite_response_as_unsent_draft,
+    try_parse_tool_call_compat_response,
 )
 from src.kernel.llm import LLMPayload, ReasoningText, ROLE, Text
 
@@ -45,3 +46,15 @@ def test_prepare_nfc_model_set_uses_reasoning_text_for_cli_deepseek() -> None:
     assert "reasoning_history_mode" not in model_set[0]["extra_params"]
     assert prepared[0]["extra_params"]["reasoning_history_mode"] is True
     assert prepared[0]["extra_params"]["thinking"]["enabled"] is False
+
+
+def test_compat_missing_call_ids_are_unique_across_responses() -> None:
+    """不同响应缺失 call_id 时不得复用同一个兜底 ID。"""
+    raw_message = '{"tool_calls":[{"name":"nfc_reply","args":{"content":""}}]}'
+    first = SimpleNamespace(message=raw_message, call_list=[], payloads=[])
+    second = SimpleNamespace(message=raw_message, call_list=[], payloads=[])
+
+    assert try_parse_tool_call_compat_response(first) is True
+    assert try_parse_tool_call_compat_response(second) is True
+
+    assert first.call_list[0].id != second.call_list[0].id

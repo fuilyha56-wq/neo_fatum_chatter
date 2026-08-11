@@ -400,8 +400,14 @@ class NeoFatumChatter(BaseChatter):
             kwargs: dict[str, Any] = {"content": content}
             if reply_to:
                 kwargs["reply_to"] = reply_to
-            await self.exec_llm_usable(NFCReplyAction, trigger_msg, **kwargs)
-            return True
+            success, execution_result = await self.exec_llm_usable(
+                NFCReplyAction,
+                trigger_msg,
+                **kwargs,
+            )
+            if not success:
+                logger.warning(f"通过框架执行 NFCReplyAction 未成功: {execution_result}")
+            return bool(success)
         except Exception as e:
             logger.error(f"通过框架执行 NFCReplyAction 失败: {e}", exc_info=True)
             return False

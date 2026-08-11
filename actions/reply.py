@@ -18,6 +18,7 @@ from ..execution.reply_executor import (
     sanitize_segment,
     send_reply_segments,
 )
+from ..execution.result import ExecutionResult
 
 logger = get_logger("NFC_reply")
 
@@ -64,17 +65,34 @@ class NFCReplyAction(BaseAction):
 
         raw_segments = coerce_content_segments(content)
         if not raw_segments:
-            yield False, "内容为空，未发送"
+            yield False, ExecutionResult(
+                failed=True,
+                failure_kind="empty_content",
+                reason="内容为空，未发送",
+            ).to_tool_result()
             return
 
         cleaned_segments: list[str] = []
+        stripped_thinking = False
+        stripped_metadata = False
         for segment in raw_segments:
-            cleaned, _stripped_thinking, _stripped_meta = sanitize_segment(segment)
+            cleaned, segment_stripped_thinking, segment_stripped_metadata = (
+                sanitize_segment(segment)
+            )
+            stripped_thinking = stripped_thinking or segment_stripped_thinking
+            stripped_metadata = stripped_metadata or segment_stripped_metadata
             if cleaned:
                 cleaned_segments.append(cleaned)
 
         if not cleaned_segments:
-            yield False, "清洗后内容为空，未发送"
+            yield False, ExecutionResult(
+                attempted_segments=len(raw_segments),
+                failed=True,
+                failure_kind="empty_content",
+                reason="清洗后内容为空，未发送",
+                stripped_metadata=stripped_metadata,
+                stripped_thinking=stripped_thinking,
+            ).to_tool_result()
             return
 
         # 段间延迟从 plugin 配置读取，沿用旧路径以避免产生新的依赖入口。
@@ -122,11 +140,31 @@ class NFCReplyAction(BaseAction):
         )
 
         if not ok:
-            yield False, "消息发送失败"
+            yield False, ExecutionResult(
+                sent_segments=sent,
+                attempted_segments=len(cleaned_segments),
+                failed=True,
+                failure_kind="send_failure",
+                reason="消息发送失败",
+                stripped_metadata=stripped_metadata,
+                stripped_thinking=stripped_thinking,
+            ).to_tool_result()
             return
 
         if not sent:
-            yield False, "未发送任何消息"
+            yield False, ExecutionResult(
+                attempted_segments=len(cleaned_segments),
+                failed=True,
+                failure_kind="send_failure",
+                reason="未发送任何消息",
+                stripped_metadata=stripped_metadata,
+                stripped_thinking=stripped_thinking,
+            ).to_tool_result()
             return
 
-        yield True, f"已发送 {len(sent)} 条消息"
+        yield True, ExecutionResult(
+            sent_segments=sent,
+            attempted_segments=len(cleaned_segments),
+            stripped_metadata=stripped_metadata,
+            stripped_thinking=stripped_thinking,
+        ).to_tool_result()
