@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from neo_fatum_chatter.services.context_sanitizer import (
-    close_pending_tool_chain,
+    append_suspend_payload_if_tool_result_tail,
     prepare_payload_chain_for_send,
     sanitize_payload_chain,
 )
@@ -34,7 +34,7 @@ def _tool_result(call_id, text):
     return LLMPayload(ROLE.TOOL_RESULT, [ToolResult(value=text, call_id=call_id, name="t")])
 
 
-def test_close_pending_tool_chain_appends_bridge_when_tail_is_tool_result():
+def test_append_suspend_payload_when_tail_is_tool_result():
     resp = _FakeResponse(
         [
             _user("hi"),
@@ -42,14 +42,31 @@ def test_close_pending_tool_chain_appends_bridge_when_tail_is_tool_result():
             _tool_result("c1", "ok"),
         ]
     )
-    closed = close_pending_tool_chain(resp, reason="test")
+    closed = append_suspend_payload_if_tool_result_tail(resp, reason="test")
     assert closed is True
     assert resp.payloads[-1].role == ROLE.ASSISTANT
+    assert resp.payloads[-1].content == [Text("__SUSPEND__")]
 
 
-def test_close_pending_tool_chain_noop_when_tail_is_user():
+def test_prepare_keeps_tool_result_tail_for_normal_followup():
+    """正常工具续轮应直接把尾部结果交给下一次模型请求。"""
+    resp = _FakeResponse(
+        [
+            _user("hi"),
+            _assistant([ToolCall(id="c1", name="tool-x", args={})]),
+            _tool_result("c1", "ok"),
+        ]
+    )
+    original_payloads = list(resp.payloads)
+
+    assert prepare_payload_chain_for_send(resp, reason="normal followup") is False
+    assert resp.payloads == original_payloads
+    assert resp.payloads[-1].role == ROLE.TOOL_RESULT
+
+
+def test_append_suspend_payload_noop_when_tail_is_user():
     resp = _FakeResponse([_user("hi")])
-    assert close_pending_tool_chain(resp, reason="test") is False
+    assert append_suspend_payload_if_tool_result_tail(resp, reason="test") is False
 
 
 def test_sanitize_drops_orphan_assistant_before_first_user():
@@ -78,7 +95,7 @@ def test_sanitize_merges_consecutive_assistants():
     assert assistant_count == 1
 
 
-def test_sanitize_inserts_user_bridge_between_tool_result_and_user():
+def test_sanitize_preserves_valid_tool_result_to_user_sequence():
     resp = _FakeResponse(
         [
             _user("u"),
@@ -87,11 +104,16 @@ def test_sanitize_inserts_user_bridge_between_tool_result_and_user():
             _user("next"),
         ]
     )
-    sanitize_payload_chain(resp, reason="test")
-    # tool_result 后必须先有 assistant 才能跟 user
-    roles = [p.role for p in resp.payloads]
-    tool_idx = roles.index(ROLE.TOOL_RESULT)
-    assert roles[tool_idx + 1] == ROLE.ASSISTANT
+    original_payloads = list(resp.payloads)
+
+    assert prepare_payload_chain_for_send(resp, reason="normal tool followup") is False
+    assert resp.payloads == original_payloads
+    assert [payload.role for payload in resp.payloads] == [
+        ROLE.USER,
+        ROLE.ASSISTANT,
+        ROLE.TOOL_RESULT,
+        ROLE.USER,
+    ]
 
 
 def test_sanitize_drops_empty_tool_result():
@@ -108,8 +130,8 @@ def test_sanitize_drops_empty_tool_result():
     assert all(p.role != ROLE.TOOL_RESULT for p in resp.payloads)
 
 
-def test_prepare_sanitizes_roles_before_closing_tool_result_tail():
-    """发送前应先移除首部孤立 assistant，再通过严格追加闭合尾部工具链。"""
+def test_prepare_sanitizes_roles_without_closing_tool_result_tail():
+    """普通发送前仅修复非法遗留角色，不闭合合法工具结果尾态。"""
     context_manager = LLMContextManager()
     resp = _FakeResponse(
         [
@@ -135,7 +157,6 @@ def test_prepare_sanitizes_roles_before_closing_tool_result_tail():
         ROLE.USER,
         ROLE.ASSISTANT,
         ROLE.TOOL_RESULT,
-        ROLE.ASSISTANT,
     ]
 
 
@@ -174,8 +195,8 @@ def test_prepare_repairs_partially_completed_tool_group_before_closing():
     assert [call.id for call in retained_calls] == ["done"]
 
 
-def test_timeout_entry_sanitizes_before_closing_tool_chain():
-    """超时入口不得在统一清洗前直接追加 assistant 桥接。"""
+def test_timeout_entry_sanitizes_before_appending_suspend_payload():
+    """超时恢复需先处理旧链，再追加非空挂起标记。"""
     context_manager = LLMContextManager()
     resp = _FakeResponse(
         [
@@ -195,7 +216,8 @@ def test_timeout_entry_sanitizes_before_closing_tool_chain():
 
     resp.add_payload = add_payload
 
-    TimeoutService._close_pending_tool_chain(resp)
+    TimeoutService._append_suspend_payload(resp)
     context_manager.validate_for_send(resp.payloads)
     assert resp.payloads[0].role == ROLE.USER
     assert resp.payloads[-1].role == ROLE.ASSISTANT
+    assert resp.payloads[-1].content == [Text("__SUSPEND__")]

@@ -32,7 +32,7 @@ def test_rewrite_response_as_unsent_draft_preserves_reasoning() -> None:
 
 
 def test_prepare_nfc_model_set_uses_reasoning_text_for_cli_deepseek() -> None:
-    """Console Go DeepSeek 模型应回传 reasoning_text 历史。"""
+    """Console Go DeepSeek 模型应显式开启 thinking 并回传 reasoning_text。"""
     model_set = [
         {
             "api_provider": "cli",
@@ -45,7 +45,10 @@ def test_prepare_nfc_model_set_uses_reasoning_text_for_cli_deepseek() -> None:
 
     assert "reasoning_history_mode" not in model_set[0]["extra_params"]
     assert prepared[0]["extra_params"]["reasoning_history_mode"] is True
-    assert prepared[0]["extra_params"]["thinking"]["enabled"] is False
+    # Console Go 强制 thinking mode 且要求回传 reasoning_text：必须显式开启
+    # thinking（否则响应不带 reasoning_text，后续轮次无法回传导致 400）
+    assert prepared[0]["extra_params"]["enable_thinking"] is True
+    assert prepared[0]["extra_params"]["thinking"]["enabled"] is True
 
 
 def test_compat_missing_call_ids_are_unique_across_responses() -> None:

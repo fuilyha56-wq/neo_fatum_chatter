@@ -61,10 +61,18 @@ def prepare_nfc_model_set(model_set: Any) -> Any:
         else:
             extra_params = dict(extra_params)
 
-        extra_params["enable_thinking"] = False
-        extra_params["thinking"] = {"type": "disabled", "enabled": False}
         if _uses_console_go_reasoning_text(model_entry):
+            # Console Go 的 DeepSeek 强制处于 thinking mode 并校验历史 assistant
+            # 消息必须回传 reasoning_text（否则 400 "reasoning_text must be
+            # passed back"）。若请求不显式开启 thinking，响应不带 reasoning_text，
+            # 后续轮次就会因无法回传而 400。因此必须显式开启 thinking，
+            # 让响应产生 reasoning_text 供后续轮次原样回传。
+            extra_params["enable_thinking"] = True
+            extra_params["thinking"] = {"type": "enabled", "enabled": True}
             extra_params["reasoning_history_mode"] = True
+        else:
+            extra_params["enable_thinking"] = False
+            extra_params["thinking"] = {"type": "disabled", "enabled": False}
         model_entry["extra_params"] = extra_params
 
     return prepared_model_set

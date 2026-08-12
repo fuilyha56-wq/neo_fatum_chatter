@@ -25,7 +25,9 @@ from neo_fatum_chatter.runtime.turn_controller import (
     TurnInputResult,
     commit_turn_decision,
 )
-from neo_fatum_chatter.services.context_sanitizer import close_pending_tool_chain
+from neo_fatum_chatter.services.context_sanitizer import (
+    append_suspend_payload_if_tool_result_tail,
+)
 from src.app.plugin_system.base import Stop
 from src.kernel.llm import (
     LLMContextManager,
@@ -138,7 +140,7 @@ async def test_commit_does_not_wait_after_complete_reply_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_commit_can_wait_after_partial_reply_success() -> None:
-    """部分发送已有可见段落时，可继续等待用户回应。"""
+    """部分发送后进入等待时，应显式挂起尾部工具事务。"""
     waiting_configs: list[object] = []
     session = SimpleNamespace(
         add_bot_planning=lambda **kwargs: None,
@@ -168,6 +170,11 @@ async def test_commit_can_wait_after_partial_reply_success() -> None:
         session.waiting_config = waiting_config
 
     session.set_waiting = set_waiting
+    response = _make_response(
+        [ToolCall(id="call-1", name="nfc_reply", args={"content": "已发送部分"})],
+        [ToolResult(value="发送成功", call_id="call-1", name="nfc_reply")],
+    )
+    response.add_payload = lambda payload: response.payloads.append(payload)
     result = await commit_turn_decision(
         chatter,
         Decision(
@@ -177,7 +184,7 @@ async def test_commit_can_wait_after_partial_reply_success() -> None:
             reply_execution_failed=True,
             has_meaningful_action=True,
         ),
-        SimpleNamespace(message=""),
+        response,
         session,
         config,
         SimpleNamespace(),
@@ -190,6 +197,8 @@ async def test_commit_can_wait_after_partial_reply_success() -> None:
 
     assert len(waiting_configs) == 1
     assert result.continue_loop is True
+    assert response.payloads[-1].role == ROLE.ASSISTANT
+    assert response.payloads[-1].content == [Text("__SUSPEND__")]
 
 
 def _make_response(
@@ -476,7 +485,13 @@ class TestPurgeEmptyReplyArtifacts:
 
         _purge_empty_reply_artifacts(response, {"call-1"})
 
-        assert close_pending_tool_chain(response, reason="test-empty-reply") is False
+        assert (
+            append_suspend_payload_if_tool_result_tail(
+                response,
+                reason="test-empty-reply",
+            )
+            is False
+        )
         assert [payload.role for payload in response.payloads] == [ROLE.USER]
 
     def test_preserves_non_empty_calls(self) -> None:

@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Any
 from src.app.plugin_system.api.log_api import get_logger
 from src.kernel.llm import LLMPayload
 
-from .context_sanitizer import prepare_payload_chain_for_send
+from .context_sanitizer import (
+    append_suspend_payload_if_tool_result_tail,
+    prepare_payload_chain_for_send,
+)
 
 from ..thinker.timeout_handler import TimeoutHandler
 
@@ -41,7 +44,7 @@ class TimeoutService:
 
     def build_timeout_result(self, response: Any, session: NFCSession) -> TimeoutResult:
         """处理超时并返回追加到 response 的 user payload。"""
-        self._close_pending_tool_chain(response)
+        self._append_suspend_payload(response)
         timeout_ctx = self._handler.handle_timeout(session)
         is_final_timeout = self._handler.should_give_up(session)
 
@@ -57,6 +60,7 @@ class TimeoutService:
         return TimeoutResult(payload=payload, is_final_timeout=is_final_timeout)
 
     @staticmethod
-    def _close_pending_tool_chain(response: Any) -> None:
-        """必要时插入 assistant 桥接 payload，闭合 tool_result 链。"""
-        prepare_payload_chain_for_send(response, reason="超时触发")
+    def _append_suspend_payload(response: Any) -> None:
+        """兼容旧会话，在超时恢复前补齐非空挂起标记。"""
+        prepare_payload_chain_for_send(response, reason="超时恢复")
+        append_suspend_payload_if_tool_result_tail(response, reason="超时恢复")

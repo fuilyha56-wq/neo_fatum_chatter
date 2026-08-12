@@ -128,7 +128,7 @@ NFC 在 `EventBus` 上发布 / 订阅的事件名：
 |---|---|
 | `runtime/orchestrator.py` | `execute_orchestrator()` 主循环 |
 | `runtime/turn_controller.py` | `prepare_turn_input()` 回合准备 |
-| `services/context_sanitizer.py` | `prepare_payload_chain_for_send()` / `close_pending_tool_chain()` |
+| `services/context_sanitizer.py` | `prepare_payload_chain_for_send()` / `append_suspend_payload_if_tool_result_tail()` |
 | `services/timeout_service.py` | `TimeoutService.check_timeout()` / `build_timeout_result()` |
 | `services/proactive_service.py` | `ProactiveService.apply_schedule()` |
 | `services/summary_service.py` | `SummaryService.maybe_schedule_compression()` |

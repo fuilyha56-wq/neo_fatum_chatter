@@ -13,7 +13,10 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 from ..domain.turn_trigger import TurnTrigger, classify_turn_trigger
 from ..models import WaitingConfig
 from ..services import SummaryService
-from ..services.context_sanitizer import prepare_payload_chain_for_send
+from ..services.context_sanitizer import (
+    append_suspend_payload_if_tool_result_tail,
+    prepare_payload_chain_for_send,
+)
 from .message_buffer import dedupe_messages_by_id
 
 if TYPE_CHECKING:
@@ -610,6 +613,7 @@ async def commit_turn_decision(
         is_final_timeout = False
 
     if wait_seconds > 0:
+        append_suspend_payload_if_tool_result_tail(response, reason="进入等待")
         waiting_config = WaitingConfig(
             expected_reaction=decision.expected_reaction,
             max_wait_seconds=wait_seconds,

@@ -10,6 +10,7 @@ from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall, ToolResult
 logger = get_logger("NFC_context_sanitizer")
 
 _PINNED_ROLES = {ROLE.SYSTEM, ROLE.TOOL}
+_SUSPEND_TEXT = "__SUSPEND__"
 
 
 def _has_tool_call(payload: Any) -> bool:
@@ -57,16 +58,20 @@ def _preview_roles(payloads: list[Any], index: int) -> list[str]:
     return [str(getattr(item, "role", "?")) for item in payloads[start:end]]
 
 
-def close_pending_tool_chain(response: Any, *, reason: str = "继续对话") -> bool:
-    """必要时补 assistant 桥接，闭合尾部 tool_result 链。"""
+def append_suspend_payload_if_tool_result_tail(
+    response: Any,
+    *,
+    reason: str = "进入等待",
+) -> bool:
+    """进入等待前为尾部 tool_result 追加非空挂起标记。"""
     payloads = getattr(response, "payloads", None)
     if not isinstance(payloads, list) or not payloads:
         return False
     if getattr(payloads[-1], "role", None) != ROLE.TOOL_RESULT:
         return False
 
-    logger.debug(f"[NFC] {reason}: 尾部 tool_result，补 assistant 桥接以闭合工具链")
-    response.add_payload(LLMPayload(ROLE.ASSISTANT, Text("")))
+    logger.debug(f"[NFC] {reason}: 尾部 tool_result，追加 ASSISTANT __SUSPEND__")
+    response.add_payload(LLMPayload(ROLE.ASSISTANT, Text(_SUSPEND_TEXT)))
     return True
 
 
@@ -229,11 +234,6 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
             continue
 
         if role == ROLE.USER:
-            if last_convo_role == ROLE.TOOL_RESULT:
-                cleaned.append(LLMPayload(ROLE.ASSISTANT, Text("")))
-                last_convo_role = ROLE.ASSISTANT
-                changed = True
-                logger.debug(f"[NFC] {reason}: tool_result 后插入 assistant 桥接")
             cleaned.append(payload)
             last_convo_role = ROLE.USER
             seen_user = True
@@ -308,5 +308,4 @@ def prepare_payload_chain_for_send(response: Any, *, reason: str = "发送前") 
     """发送 LLM 前统一整理 payload 链。"""
     healed = heal_orphan_tool_results(response, where=reason)
     sanitized = sanitize_payload_chain(response, reason=reason)
-    closed = close_pending_tool_chain(response, reason=reason)
-    return healed or closed or sanitized
+    return healed or sanitized
