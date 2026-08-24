@@ -1,6 +1,6 @@
 {
     "name": "neo_fatum_chatter",
-    "version": "2.6.3",
+    "version": "2.6.4",
     "description": "Neo Fatum Chatter 对话引擎 — 基于心理活动流的私聊特化聊天器",
     "author": "Lycoris",
     "license": "AGPL-3.0",
@@ -91,7 +91,15 @@
         }
     ],
     "entry_point": "plugin.py",
-    "api_version": "1.0.0",
+    "api_version": {
+        "config_api": "1.0.0",
+        "event_api": "1.0.0",
+        "llm_api": "1.0.0",
+        "log_api": "1.0.0",
+        "send_api": "1.0.0",
+        "service_api": "1.0.0",
+        "stream_api": "1.0.0"
+    },
     "display_name": "Neo命运聊天器",
     "categories": [
         "chat"
