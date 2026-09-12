@@ -233,6 +233,14 @@ async def compress_history(
         f"摘要 {len(summary)} 字"
     )
 
+    # ── 6. 信念固化（追加在同一后台任务里，失败静默） ──
+    try:
+        from .belief_service import consolidate_beliefs
+
+        await consolidate_beliefs(session, config, history_text, session_store)
+    except Exception as exc:
+        logger.debug(f"[NFC] 信念固化未执行（不影响压缩结果）: {exc}")
+
 
 def should_compress(session: "NFCSession", config: "NFCConfig") -> bool:
     """判断是否应触发压缩。

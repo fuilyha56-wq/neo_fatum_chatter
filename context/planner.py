@@ -7,6 +7,7 @@ from typing import Any
 
 from .sources.initial_source import build_initial_context_plan
 from .sources.plugin_source import collect_plugin_turn_contributions
+from .sources.state_source import build_state_contributions
 from .types import ContextContribution, ContextPlan, InitialContextPlan
 
 
@@ -96,6 +97,8 @@ class ContextPlanner:
         user_text = (
             f"[新消息]\n{cleaned_unreads}"
             "\n\n---\n重申：你的响应必须仅包含工具调用（nfc_reply 或 do_nothing），不要在文本区域输出任何内容。"
+            "调用 nfc_reply 时 content 必须是至少一段要发送给对方的可见文本；"
+            "不想说话就调用 do_nothing，绝不要用空 content 调用 nfc_reply。"
         )
         prompt_name = (
             getattr(getattr(config, "flashback", None), "injection_point", "")
@@ -139,6 +142,13 @@ class ContextPlanner:
                     content=proactive_context,
                 )
             )
+
+        # 内部状态贡献（内驱/剧情世界/信念/角色卡）——中性状态自动为空
+        if session is not None and config is not None:
+            try:
+                turn_contributions.extend(build_state_contributions(session, config))
+            except Exception:
+                pass
 
         return ContextPlan(
             user_text=user_text,

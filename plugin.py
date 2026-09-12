@@ -12,6 +12,7 @@ from src.app.plugin_system.base import BasePlugin, register_plugin
 from src.kernel.concurrency import get_task_manager
 
 from .actions.do_nothing import DoNothingAction
+from .actions.memo import NFCMemoAction, NFCMemoDeleteAction
 from .actions.query_activity_pattern import QueryActivityPatternAction
 from .actions.query_habits import QueryHabitsAction
 from .actions.record_habit import RecordHabitAction
@@ -39,9 +40,9 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.6.3"
+    plugin_version = "2.6.5"
     plugin_author = "Lycoris"
-    plugin_description = "心理活动流聊天器，模拟真实人类的连续心理活动和对话节奏"
+    plugin_description = "内稳态双系统聊天器：心理活动流 + 内驱状态 + 双登记簿世界 + 信念记忆"
     configs = [NFCConfig]
 
     _session_store: NFCSessionStore
@@ -207,6 +208,36 @@ class NFCPlugin(BasePlugin):
                 force_overwrite=True,
             )
 
+        # 内驱状态后台演化：只推进内存中的活跃会话，零 IO、零 LLM。
+        # 磁盘会话无需补算——advance_to 按真实流逝时间演化，下次事件触发自然追平。
+        drives_cfg = getattr(config, "drives", None)
+        if drives_cfg is not None and drives_cfg.enabled:
+
+            async def drives_tick() -> None:
+                import time as _time
+
+                now = _time.time()
+                updated = 0
+                for stream_id, session in list(
+                    self._session_store.get_all_cached().items()
+                ):
+                    try:
+                        session.drives.advance_to(now)
+                        updated += 1
+                    except Exception:
+                        continue
+                if updated:
+                    logger.debug(f"[内驱tick] 已演化 {updated} 个活跃会话的内驱状态")
+
+            await scheduler.create_schedule(
+                callback=drives_tick,
+                trigger_type=TriggerType.TIME,
+                trigger_config={"delay_seconds": drives_cfg.tick_interval},
+                is_recurring=True,
+                task_name="NFC_drive_tick",
+                force_overwrite=True,
+            )
+
         logger.info("NFC 调度器任务注册完成")
 
     async def _check_interrupted_sessions(self) -> None:
@@ -313,6 +344,8 @@ class NFCPlugin(BasePlugin):
             QueryHabitsAction,
             UpdateHabitAction,
             RemoveHabitAction,
+            NFCMemoAction,
+            NFCMemoDeleteAction,
             SetProactiveEnabledAction,
             QueryProactiveStatusAction,
             NFCContextClearHandler,

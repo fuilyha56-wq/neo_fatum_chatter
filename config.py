@@ -292,6 +292,14 @@ class NFCConfig(BaseConfig):
             default=2.0,
             description="多段消息之间的最大间隔(秒)",
         )
+        semantic_delays: bool = Field(
+            default=True,
+            description=(
+                "启用语义化打字延迟：段间延迟按下一段的字数（typing_chars_per_sec）、"
+                "标点语气（问句/感叹/省略号）动态计算，而非纯随机。"
+                "关闭则退回 segment_delay_min/max 均匀随机。"
+            ),
+        )
         streaming_enabled: bool = Field(
             default=False,
             description=(
@@ -434,6 +442,20 @@ class NFCConfig(BaseConfig):
                 "一次是否有新消息到达。值越小响应越快，CPU 占用略高。"
             ),
         )
+        interrupt_cooldown: float = Field(
+            default=3.0,
+            description=(
+                "打断后冷却基准时长（秒）。打断后等待此时长再重新发起请求，"
+                "以收集可能连发的后续消息；连续打断时冷却时间递增。"
+            ),
+        )
+        max_consecutive_interrupts: int = Field(
+            default=3,
+            description=(
+                "连续打断上限。达到后不再打断 LLM 生成，等本次请求完成后"
+                "统一处理新消息，防止高频消息把 LLM 调用拖入无限重启。"
+            ),
+        )
 
         @field_validator("accumulate_window", "accumulate_max_window", "interrupt_poll_seconds", mode="after")
         @classmethod
@@ -463,6 +485,189 @@ class NFCConfig(BaseConfig):
                 return "default_chatter_user_prompt"
             return v
 
+    @config_section("drives")
+    class DrivesSection(SectionBase):
+        """内驱状态机配置（角色的潜意识层）。"""
+
+        enabled: bool = Field(
+            default=True,
+            description=(
+                "是否启用内驱状态机。启用后角色拥有随时间演化的内部状态"
+                "（社交欲/精力/好奇心/被忽视感/情绪基线），并调制等待时长、"
+                "渲染进提示词。关闭则完全回到旧行为。"
+            ),
+        )
+        modulation_strength: float = Field(
+            default=0.3,
+            description=(
+                "内驱对等待时长的调制强度（0~1）。0 = 只展示状态不影响数值，"
+                "越大影响越明显（调制倍率被夹在 0.5~2.0 倍）。"
+            ),
+        )
+        tick_interval: int = Field(
+            default=60,
+            description="内驱后台演化间隔（秒），只推进内存中的活跃会话，不产生 IO。",
+        )
+
+        @field_validator("modulation_strength", mode="after")
+        @classmethod
+        def _clamp_modulation(cls, value: float) -> float:
+            return max(0.0, min(float(value), 1.0))
+
+        @field_validator("tick_interval", mode="after")
+        @classmethod
+        def _positive_tick(cls, value: int) -> int:
+            return max(10, int(value))
+
+    @config_section("appraisal")
+    class AppraisalSection(SectionBase):
+        """S1 感知评估配置（System 1：每批消息的结构化第一反应）。"""
+
+        enabled: bool = Field(
+            default=True,
+            description=(
+                "是否启用 S1 感知评估。每批新消息先用轻量模型产出结构化评估："
+                "情绪反应、登记簿归属（现实/故事）、场景/剧情事实、话题钩子、"
+                "承诺、自然延迟建议。失败时静默跳过，不影响主流程。"
+            ),
+        )
+        model_task: str = Field(
+            default="sub_actor",
+            description="S1 评估使用的模型任务名（建议轻量模型）。",
+        )
+        timeout_seconds: float = Field(
+            default=8.0,
+            description="S1 评估的超时秒数，超时视为本轮无评估。",
+        )
+        defer_enabled: bool = Field(
+            default=True,
+            description=(
+                "是否启用 S1 自然延迟：评估建议'缓一缓再回'时，该意见在"
+                "下一批消息的决策请求发起前生效（让出建议的等待秒数），"
+                "不干扰当前轮的回复——S1 是副决策，永不阻塞主模型。"
+            ),
+        )
+        max_defer_seconds: float = Field(
+            default=18.0,
+            description="单次自然延迟的上限（秒）。",
+        )
+        min_input_chars: int = Field(
+            default=8,
+            description="消息文本短于此长度时跳过 S1 评估（省钱，按消息本体字符数计量）。",
+        )
+
+        @field_validator("timeout_seconds", "max_defer_seconds", mode="after")
+        @classmethod
+        def _positive_seconds(cls, value: float) -> float:
+            return max(0.5, float(value))
+
+    @config_section("character")
+    class CharacterSection(SectionBase):
+        """角色卡配置（三层人设：红线 + 隐藏事实 + 剧情覆层）。"""
+
+        redlines: list[str] = Field(
+            default_factory=list,
+            description=(
+                "角色的行为红线——无论什么情况都不会做的事。"
+                "例如：['不会发语音', '不会讨论政治话题']。"
+            ),
+        )
+        hidden_facts: list[dict[str, str]] = Field(
+            default_factory=list,
+            description=(
+                "角色的隐藏事实（秘密/过去/真实想法）。平时不进提示词，"
+                "S1 判定揭示条件满足后才注入，角色因此可以欲言又止、有秘密可揭。"
+                "每条格式：{fact: '事实内容', condition: '揭示条件（自然语言）'}。"
+                "例：{fact: '其实早就知道Ta换了头像', condition: 'Ta 提到换头像的事'}。"
+            ),
+        )
+
+    @config_section("beliefs")
+    class BeliefsSection(SectionBase):
+        """信念层配置（对用户/关系的持久化理解）。"""
+
+        enabled: bool = Field(
+            default=True,
+            description=(
+                "是否启用信念固化。每次记忆压缩完成后，额外用轻量模型从"
+                "近期事件中蒸馏对用户/关系的持久判断，渲染为'你已经知道的'块。"
+            ),
+        )
+        model_task: str = Field(
+            default="sub_actor",
+            description="信念蒸馏使用的模型任务名。",
+        )
+        max_extract: int = Field(
+            default=5,
+            description="每次蒸馏最多提取的信念条数。",
+        )
+
+    @config_section("intent")
+    class IntentSection(SectionBase):
+        """主动意图队列配置。"""
+
+        enabled: bool = Field(
+            default=True,
+            description=(
+                "是否启用意图队列。话题钩子/到期承诺/内驱冲动以冲动值竞争，"
+                "最强者越过阈值即触发主动发起（有目的的主动）。"
+                "无合格意图时回退旧的沉默概率兜底。"
+            ),
+        )
+        fire_threshold: float = Field(
+            default=0.75,
+            description="意图触发阈值（0~1），冲动值达到后允许触发。",
+        )
+
+        @field_validator("fire_threshold", mode="after")
+        @classmethod
+        def _clamp_threshold(cls, value: float) -> float:
+            return max(0.1, min(float(value), 1.0))
+
+    @config_section("memo")
+    class MemoSection(SectionBase):
+        """备忘录配置（LLM 显式中短期便签）。"""
+
+        enabled: bool = Field(
+            default=True,
+            description=(
+                "是否启用备忘录。启用后模型可调用 nfc_memo / nfc_memo_delete "
+                "给自己记带过期时间的便签，便签渲染进每轮提示词末尾"
+                "（turn 级，不进对话链）。关闭则动作仍可注册但不再渲染。"
+            ),
+        )
+        max_entries: int = Field(
+            default=10,
+            description="单聊最大有效备忘条数，超出按创建时间淘汰最早一条。",
+        )
+        default_expire_hours: float = Field(
+            default=24.0,
+            description="模型未指定 expire_hours 时的默认存活时长（小时）。",
+        )
+        min_expire_hours: float = Field(
+            default=1.0,
+            description="单条备忘最短存活时长（小时）。",
+        )
+        max_expire_hours: float = Field(
+            default=336.0,
+            description="单条备忘最长存活时长（小时），默认 14 天。",
+        )
+
+        @field_validator("max_entries", mode="after")
+        @classmethod
+        def _clamp_entries(cls, value: int) -> int:
+            return max(1, min(int(value), 50))
+
+        @field_validator(
+            "default_expire_hours",
+            "min_expire_hours",
+            "max_expire_hours",
+            mode="after",
+        )
+        @classmethod
+        def _positive_hours(cls, value: float) -> float:
+            return max(0.1, float(value))
+
     @config_section("debug")
     class DebugSection(SectionBase):
         """调试配置。"""
@@ -483,4 +688,10 @@ class NFCConfig(BaseConfig):
     prompt: PromptSection = Field(default_factory=PromptSection)
     buffer: BufferSection = Field(default_factory=BufferSection)
     flashback: FlashbackSection = Field(default_factory=FlashbackSection)
+    drives: DrivesSection = Field(default_factory=DrivesSection)
+    appraisal: AppraisalSection = Field(default_factory=AppraisalSection)
+    character: CharacterSection = Field(default_factory=CharacterSection)
+    beliefs: BeliefsSection = Field(default_factory=BeliefsSection)
+    intent: IntentSection = Field(default_factory=IntentSection)
+    memo: MemoSection = Field(default_factory=MemoSection)
     debug: DebugSection = Field(default_factory=DebugSection)

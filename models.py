@@ -106,6 +106,8 @@ class NFCEventType(Enum):
     WAIT_TIMEOUT = "wait_timeout"
     PROACTIVE_TRIGGER = "proactive_trigger"
     USER_INTERRUPTED = "user_interrupted"
+    MEMO_WRITTEN = "memo_written"
+    MEMO_DELETED = "memo_deleted"
 
     def __str__(self) -> str:
         return self.value

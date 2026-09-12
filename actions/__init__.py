@@ -6,11 +6,13 @@
 - QueryActivityPatternAction: 查询用户消息活跃分布
 - RecordHabitAction: 记录用户习惯观察
 - QueryHabitsAction: 查询已记录的用户习惯
+- NFCMemoAction / NFCMemoDeleteAction: 私人备忘录写入与删除
 """
 
 from __future__ import annotations
 
 from .do_nothing import DoNothingAction
+from .memo import NFCMemoAction, NFCMemoDeleteAction
 from .query_activity_pattern import QueryActivityPatternAction
 from .query_habits import QueryHabitsAction
 from .record_habit import RecordHabitAction
@@ -21,6 +23,8 @@ from .update_habit import UpdateHabitAction
 
 __all__ = [
     "DoNothingAction",
+    "NFCMemoAction",
+    "NFCMemoDeleteAction",
     "NFCReplyAction",
     "QueryActivityPatternAction",
     "QueryProactiveStatusAction",

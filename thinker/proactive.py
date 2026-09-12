@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import random
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.app.plugin_system.api.log_api import get_logger
 
@@ -35,6 +35,9 @@ class ProactiveThinker:
         self._session_store = session_store
         self._activity_service_cache: object | None = None
         self._activity_service_resolved = False
+        # 本次检查中通过意图队列选中的意图（stream_id → Intent），
+        # 由 mark_triggered 消费并标记 fired
+        self._selected_intents: dict[str, Any] = {}
 
     async def check_all_sessions(self) -> list[str]:
         """检查所有缓存中的 Session，返回需要主动发起的 stream_id 列表。"""
@@ -83,7 +86,55 @@ class ProactiveThinker:
                 return True
             return False
 
+        # 意图队列优先：欲望溢出 / 承诺到期 / 话题钩子（有目的的主动）
+        if await self._check_intent_queue(stream_id, session, now):
+            return True
+
         return await self._should_trigger(session)
+
+    async def _check_intent_queue(
+        self, stream_id: str, session: NFCSession, now: float
+    ) -> bool:
+        """检查意图队列是否有冲动值过阈的意图。"""
+        intent_cfg = getattr(self._config, "intent", None)
+        if intent_cfg is None or not intent_cfg.enabled:
+            return False
+
+        queue = session.intents
+        queue.grow_all(now)
+        queue.prune(now)
+
+        # 内驱溢出生成一次性 drive 意图
+        drives_cfg = getattr(self._config, "drives", None)
+        if drives_cfg is not None and drives_cfg.enabled:
+            session.drives.advance_to(now)
+            urge = session.drives.proactive_urge()
+            if urge >= 0.6:
+                queue.add(
+                    "就是忽然想找 Ta 说说话",
+                    kind="drive",
+                    urge=urge * 0.9,
+                )
+
+        intent = queue.peek_fire(intent_cfg.fire_threshold, now=now)
+        if intent is None:
+            return False
+
+        # 承诺到期不受勿扰与最小间隔限制（说好的事要做到）；
+        # 话题钩子/内驱溢出仍走勿扰与冷却。
+        if intent.kind != "commitment":
+            if self._is_quiet_hours():
+                return False
+            if session.last_proactive_at:
+                if now - session.last_proactive_at < self._config.proactive.min_interval:
+                    return False
+
+        logger.info(
+            f"主动发起（意图队列）: stream={stream_id[:8]}, "
+            f"kind={intent.kind}, urge={intent.urge:.2f}, content={intent.content[:50]}"
+        )
+        self._selected_intents[stream_id] = intent
+        return True
 
     async def _should_trigger(self, session: NFCSession) -> bool:
         """判断无预约情况下是否应主动发起（沉默条件 + 衰减概率）。"""
@@ -215,7 +266,7 @@ class ProactiveThinker:
         """标记 Session 已触发主动发起，同时清除模型预约。
 
         Returns:
-            str: 清除前的预约理由，无预约时为空字符串。
+            str: 清除前的预约理由（若有意图触发则附带意图内容），无则空字符串。
         """
         async with self._session_store.lock(stream_id):
             session = await self._session_store.get(stream_id)
@@ -224,6 +275,19 @@ class ProactiveThinker:
                 session.last_proactive_at = time.time()
                 session.scheduled_proactive_at = None
                 session.scheduled_proactive_reason = ""
+
+                # 意图队列触发：标记 fired、内驱释放、把意图内容并入理由
+                intent = self._selected_intents.pop(stream_id, None)
+                if intent is not None:
+                    session.intents.mark_fired(intent.id)
+                    if getattr(self._config, "drives", None) and self._config.drives.enabled:
+                        session.drives.on_proactive_fired()
+                    if intent.kind == "commitment":
+                        intent_reason = f"到了你答应过的时间——{intent.content}"
+                    else:
+                        intent_reason = f"你一直惦记着一件事：{intent.content}"
+                    reason = f"{reason}\n{intent_reason}".strip()
+
                 await self._session_store.save(session)
                 return reason
         return ""

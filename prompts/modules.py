@@ -223,7 +223,9 @@ async def build_proactive_context(
     )
 
     if scheduled_reason:
-        result = f"【你在上次对话结束时为这次主动发起做了预约，预约理由：{scheduled_reason}】\n\n" + result
+        # 理由可能来自模型预约，也可能来自意图队列（承诺到期/惦记的事）。
+        # 外层包装保持中性，避免把"惦记的事"错说成"预约"。
+        result = f"【你此前为这次主动联系留过一个念头：{scheduled_reason}】\n\n" + result
 
     return result
 

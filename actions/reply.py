@@ -98,6 +98,8 @@ class NFCReplyAction(BaseAction):
         # 段间延迟从 plugin 配置读取，沿用旧路径以避免产生新的依赖入口。
         segment_delay_min = 0.5
         segment_delay_max = 2.0
+        semantic_delays = False
+        chars_per_sec = 0.0
         streaming_enabled = False
         streaming_service_signature = ""
         streaming_chunk_size = 10
@@ -109,6 +111,8 @@ class NFCReplyAction(BaseAction):
                 reply_section = getattr(nfc_config, "reply", None)
                 segment_delay_min = float(getattr(reply_section, "segment_delay_min", 0.5))
                 segment_delay_max = float(getattr(reply_section, "segment_delay_max", 2.0))
+                semantic_delays = bool(getattr(reply_section, "semantic_delays", False))
+                chars_per_sec = float(getattr(reply_section, "typing_chars_per_sec", 15.0))
                 streaming_enabled = bool(getattr(reply_section, "streaming_enabled", False))
                 streaming_service_signature = str(
                     getattr(reply_section, "streaming_service_signature", "") or ""
@@ -137,6 +141,7 @@ class NFCReplyAction(BaseAction):
             streaming_chunk_size=streaming_chunk_size,
             streaming_interval=streaming_interval,
             trigger_msg=trigger_msg,
+            chars_per_sec=chars_per_sec if semantic_delays else 0.0,
         )
 
         if not ok:

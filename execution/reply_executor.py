@@ -40,6 +40,43 @@ _METADATA_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 # 触发"最后防线"截断的元数据关键字命中阈值。
 METADATA_LEAK_THRESHOLD: int = 2
 
+# 语义化延迟：按上一段结尾标点追加的停顿（秒）——问句后停更久（等对方接话），
+# 陈述句居中，省略号最长（欲言又止）。
+_PUNCT_PAUSE: tuple[tuple[tuple[str, ...], float], ...] = (
+    (("……", "...", "…",), 0.8),
+    (("？", "?", "！", "!"), 0.6),
+    (("。", "，", ",", "、", "~", "～"), 0.25),
+)
+
+
+def compute_segment_delay(
+    prev_segment: str,
+    next_segment: str,
+    *,
+    chars_per_sec: float,
+    delay_min: float,
+    delay_max: float,
+) -> float:
+    """计算两段消息之间的拟人延迟。
+
+    base = 打完下一段需要的时间（字数 / 打字速度），
+    再按上一段的结尾标点追加"等对方接话/欲言又止"的停顿，
+    最后叠加 ±20% 抖动并夹到 [delay_min, delay_max]。
+    """
+    if chars_per_sec > 0:
+        base = len(next_segment) / chars_per_sec
+    else:
+        base = (delay_min + delay_max) / 2.0
+
+    prev_tail = prev_segment[-3:] if prev_segment else ""
+    for marks, pause in _PUNCT_PAUSE:
+        if any(mark in prev_tail for mark in marks):
+            base += pause
+            break
+
+    jitter = random.uniform(0.8, 1.2)
+    return max(delay_min, min(delay_max, base * jitter))
+
 
 def coerce_content_segments(content: list[str] | str | None) -> list[str]:
     """把模型传来的 content 统一规整成可发送文本段落。
@@ -295,6 +332,7 @@ async def send_reply_segments(
     streaming_interval: float = 0.1,
     trigger_msg: Any | None = None,
     streaming_service_getter: Callable[[str], Any | None] | None = None,
+    chars_per_sec: float = 0.0,
 ) -> tuple[list[str], bool]:
     """串行发送已经清洗过的段落。
 
@@ -321,7 +359,18 @@ async def send_reply_segments(
 
     for index, segment in enumerate(segments):
         if index > 0 and delay_max > 0:
-            await sleeper(random.uniform(delay_min, delay_max))
+            if chars_per_sec > 0:
+                await sleeper(
+                    compute_segment_delay(
+                        segments[index - 1],
+                        segment,
+                        chars_per_sec=chars_per_sec,
+                        delay_min=delay_min,
+                        delay_max=delay_max,
+                    )
+                )
+            else:
+                await sleeper(random.uniform(delay_min, delay_max))
 
         if yield_point is not None:
             await yield_point()

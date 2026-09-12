@@ -23,7 +23,19 @@ from src.app.plugin_system.api.log_api import get_logger
 
 from ..mental_log import MentalLog, MentalLogEntry
 from ..models import NFCEventType, WaitingConfig
+from .beliefs import BeliefBook
+from .character_card import CharacterCard
+from .drives import DriveState
+from .intent import IntentQueue
+from .memo import Memo, MemoBook
 from .scene_state import SceneState
+from .world import (
+    REGISTER_REALITY,
+    REGISTER_STORY,
+    StoryArchiveEntry,
+    WorldState,
+    WorldTracker,
+)
 
 logger = get_logger("NFC_session_state")
 
@@ -170,6 +182,35 @@ class NFCSession:
     user_habits: list[dict[str, Any]] = field(default_factory=list)
     _max_habit_entries: int = field(default=50, repr=False)
 
+    # ── 内稳态双系统核心状态 ──────────────────────────────
+
+    # 内驱状态（潜意识层）：随时间演化、被事件扰动，详见 domain/drives.py
+    drives: DriveState = field(default_factory=DriveState)
+
+    # 双登记簿世界状态：现实登记簿沿用 scene_state（旧字段），
+    # story_world 为活跃/暂停的故事世界，story_archive 为已存档故事。
+    active_register: str = REGISTER_REALITY
+    story_world: WorldState | None = None
+    story_archive: list[StoryArchiveEntry] = field(default_factory=list)
+
+    # 信念层：对用户/关系/剧情的持久化理解（带置信度）
+    beliefs: BeliefBook = field(default_factory=BeliefBook)
+
+    # 主动意图队列：话题钩子/到期承诺/内驱冲动，详见 domain/intent.py
+    intents: IntentQueue = field(default_factory=IntentQueue)
+
+    # 备忘录：LLM 显式写入的中短期便签（带过期时间），详见 domain/memo.py
+    memos: MemoBook = field(default_factory=MemoBook)
+
+    # 角色卡运行时状态（揭示了的隐藏事实 id + 活跃覆层）
+    character_state: dict[str, Any] = field(default_factory=dict)
+
+    # S1 评估建议的自然延迟截止时间：此刻之前不发起决策请求。
+    # 仅运行时使用，不持久化。
+    respond_not_before: float = 0.0
+    # 登记簿切换的粘滞计数（隐式分类需连续两次一致才换挡），仅运行时。
+    _register_mismatch_count: int = field(default=0, repr=False)
+
     # 统计
     total_interactions: int = 0
 
@@ -225,6 +266,8 @@ class NFCSession:
         self.last_activity_at = msg_time
         # 记录用户活跃时段
         self.record_activity_hour(msg_time)
+        # 内驱：对方来消息，社交欲得到回应、被忽视感消散
+        self.drives.on_user_message(1, now=msg_time)
         return entry
 
     def add_bot_planning(
@@ -265,6 +308,20 @@ class NFCSession:
         """启用或暂停当前私聊的主动联系。"""
         self.proactive_enabled = bool(enabled)
         self.proactive_paused_reason = "" if enabled else reason.strip()
+
+    def add_memo_event(self, event_type: NFCEventType, memo: Memo) -> MentalLogEntry:
+        """把备忘写入/删除事件记入心理活动流（审计用，不参与提示词渲染）。"""
+        entry = MentalLogEntry(
+            event_type=event_type,
+            timestamp=time.time(),
+            content=memo.content,
+            metadata={
+                "memo_id": memo.memo_id,
+                "expires_at": memo.expires_at,
+            },
+        )
+        self.mental_log.add(entry)
+        return entry
 
     def record_mood(self, mood: str) -> None:
         """记录一次情绪到轨迹历史。"""
@@ -454,6 +511,12 @@ class NFCSession:
         self.scheduled_proactive_reason = ""
         self.total_interactions = 0
 
+        # 双登记簿：活跃故事属于会话上下文，清空；已存档故事与
+        # 内驱/信念/意图/习惯/备忘录/角色卡揭示状态属于长期资产，保留。
+        self.story_world = None
+        self.active_register = REGISTER_REALITY
+        self.respond_not_before = 0.0
+
         if hasattr(self, "_nfc_request_snapshot_restored"):
             delattr(self, "_nfc_request_snapshot_restored")
 
@@ -517,6 +580,14 @@ class NFCSession:
             "mood_history": self.mood_history,
             "activity_hours": self.activity_hours,
             "user_habits": self.user_habits,
+            "drives": self.drives.to_dict(),
+            "active_register": self.active_register,
+            "story_world": self.story_world.to_dict() if self.story_world else None,
+            "story_archive": [e.to_dict() for e in self.story_archive],
+            "beliefs": self.beliefs.to_list(),
+            "intents": self.intents.to_list(),
+            "memos": self.memos.to_list(),
+            "character_state": dict(self.character_state),
         }
 
     @classmethod
@@ -616,4 +687,30 @@ class NFCSession:
                 session.user_habits.append(habit)
         else:
             session.user_habits = []
+        # 内稳态双系统：内驱 / 双登记簿 / 信念 / 意图 / 角色卡状态
+        session.drives = DriveState.from_dict(data.get("drives"))
+        raw_register = str(data.get("active_register", "") or "")
+        session.active_register = (
+            REGISTER_STORY if raw_register == REGISTER_STORY else REGISTER_REALITY
+        )
+        raw_story = data.get("story_world")
+        session.story_world = (
+            WorldState.from_dict(raw_story)
+            if isinstance(raw_story, dict)
+            else None
+        )
+        raw_archive = data.get("story_archive", [])
+        session.story_archive = []
+        if isinstance(raw_archive, list):
+            for item in raw_archive:
+                entry = StoryArchiveEntry.from_dict(item)
+                if entry is not None:
+                    session.story_archive.append(entry)
+        session.beliefs = BeliefBook.from_list(data.get("beliefs"))
+        session.intents = IntentQueue.from_list(data.get("intents"))
+        session.memos = MemoBook.from_list(data.get("memos"))
+        raw_char_state = data.get("character_state", {})
+        session.character_state = (
+            dict(raw_char_state) if isinstance(raw_char_state, dict) else {}
+        )
         return session

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -167,6 +168,62 @@ async def prepare_turn_input(
                 has_pending_tool_results=has_pending_tool_results,
                 is_final_timeout=is_final_timeout,
             )
+
+        # ── S1 感知评估：与主模型请求并行（副决策，不干扰主模型） ──
+        # 1) 先收割上一轮遗留的评估（通常此刻已完成）：状态写入即刻生效；
+        # 2) 上一轮评估若建议"缓一缓"，在本批请求发起前让出该等待
+        #    （不追溯压住上一轮已发出的回复）；
+        # 3) 为当前批次发射新的评估任务，不等待——主请求立即构建发出。
+        from ..services.appraisal import appraise_messages, harvest_pending_appraisal
+
+        harvest_pending_appraisal(session, config, cancel_if_running=True)
+
+        if session.respond_not_before > 0:
+            defer_now = time.time()
+            if session.respond_not_before > defer_now:
+                remaining = session.respond_not_before - defer_now
+                logger.debug(f"[S1] 自然延迟：{remaining:.1f}s 后再处理本批消息")
+                return TurnInputResult(
+                    response=response,
+                    unread_msgs=[],
+                    next_signal=Wait(remaining),
+                    continue_loop=True,
+                    history_images_injected=history_images_injected,
+                    has_pending_tool_results=has_pending_tool_results,
+                    is_final_timeout=is_final_timeout,
+                )
+            session.respond_not_before = 0.0
+
+        now = time.time()
+        appraisal_cfg = getattr(config, "appraisal", None)
+        if appraisal_cfg is not None and appraisal_cfg.enabled:
+            # 长度门按消息本体计量：格式化文本含时间戳/昵称/QQ号包装，
+            # 拿它做门控会让 min_input_chars 永远不触发（"摸摸"也会多烧一次评估请求）
+            raw_input_chars = sum(
+                len(
+                    str(
+                        getattr(m, "processed_plain_text", None)
+                        or getattr(m, "content", "")
+                        or ""
+                    )
+                )
+                for m in unread_msgs
+            )
+            if raw_input_chars >= int(getattr(appraisal_cfg, "min_input_chars", 8)):
+                session._s1_task = asyncio.create_task(
+                    appraise_messages(
+                        formatted_text,
+                        session=session,
+                        config=config,
+                        raw_input_chars=raw_input_chars,
+                    )
+                )
+
+        # 内驱追平到当前时刻（磁盘会话加载后的补算）
+        drives_cfg = getattr(config, "drives", None)
+        if drives_cfg is not None and drives_cfg.enabled:
+            session.drives.advance_to(now)
+
         formatted_text = "\n".join(
             chatter.format_message_line(message, time_format="%Y-%m-%d %H:%M:%S")
             for message in unread_msgs
@@ -266,21 +323,17 @@ async def prepare_turn_input(
         )
         is_final_timeout = timeout_result.is_final_timeout
         is_timeout_turn = True
-        timeout_upserted = False
-        if response.payloads and response.payloads[-1].role == ROLE.USER:
-            last_payload = response.payloads[-1]
-            timeout_text = (
-                timeout_result.payload.content.text  # type: ignore[attr-defined]
-                if isinstance(timeout_result.payload.content, Text)
-                else ""
-            )
-            if timeout_text and last_payload.content and isinstance(last_payload.content[-1], Text):
-                last_payload.content[-1] = Text(
-                    f"{last_payload.content[-1].text}\n{timeout_text}"  # type: ignore[attr-defined]
-                )
-                timeout_upserted = True
-        if not timeout_upserted:
-            response.add_payload(timeout_result.payload)
+
+        # 内驱：一次等待超时（对方一直没回）压低情绪与精力、抬好奇
+        timeout_drives_cfg = getattr(config, "drives", None)
+        if timeout_drives_cfg is not None and timeout_drives_cfg.enabled:
+            session.drives.on_wait_timeout()
+
+        # 超时提示改为 request-only transient（对齐 KFC 的干净设计）：
+        # 随本轮请求临时注入，发送后由 RequestView 剥离，
+        # 不再写进 response 链——旧实现会把它永久留在链里并被
+        # request_snapshot 带着重启，多轮超时后上下文残留一堆提示文本。
+        extra_payload = timeout_result.payload
     else:  # TurnTrigger.IDLE_WAIT
         if session.is_waiting():
             return TurnInputResult(
@@ -524,6 +577,16 @@ async def commit_turn_decision(
         raw_response=getattr(response, "message", "") or "",
     )
 
+    # 内驱：发完话 = 精力小幅消耗 + 社交欲释放
+    commit_drives_cfg = getattr(config, "drives", None)
+    if (
+        commit_drives_cfg is not None
+        and commit_drives_cfg.enabled
+        and decision.has_reply_action
+        and decision.visible_reply_segments
+    ):
+        session.drives.on_bot_reply(len(decision.visible_reply_segments))
+
     # 记录情绪轨迹
     if decision.mood:
         session.record_mood(decision.mood)
@@ -602,6 +665,20 @@ async def commit_turn_decision(
         decision.wait_seconds,
         session.consecutive_timeout_count,
     )
+
+    # 内驱调制等待时长：社交欲高→更想在线等；疲惫/被冷落→懒得挂在线。
+    # 调制后重新夹回配置区间，避免突破 max_seconds。
+    if (
+        commit_drives_cfg is not None
+        and commit_drives_cfg.enabled
+        and wait_seconds > 0
+    ):
+        wait_seconds = session.drives.modulate_wait(
+            wait_seconds, strength=commit_drives_cfg.modulation_strength
+        )
+        wait_seconds = max(
+            config.wait.min_seconds, min(wait_seconds, config.wait.max_seconds)
+        )
 
     if decision.reply_execution_failed and not assistant_text:
         logger.warning("回复完全发送失败，取消等待以便及时处理后续消息")

@@ -1,7 +1,7 @@
 {
     "name": "neo_fatum_chatter",
-    "version": "2.6.4",
-    "description": "Neo Fatum Chatter 对话引擎 — 基于心理活动流的私聊特化聊天器",
+    "version": "2.6.5",
+    "description": "Neo Fatum Chatter 对话引擎 — 内稳态双系统聊天器：心理活动流 + 内驱状态 + 双登记簿世界 + 信念记忆 + 备忘录",
     "author": "Lycoris",
     "license": "AGPL-3.0",
     "dependencies": {
@@ -22,6 +22,16 @@
         {
             "component_type": "action",
             "component_name": "do_nothing",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "nfc_memo",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "nfc_memo_delete",
             "dependencies": []
         },
         {

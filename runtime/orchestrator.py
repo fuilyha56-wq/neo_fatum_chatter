@@ -33,6 +33,7 @@ from ..services import (
     ProactiveService,
     TimeoutService,
 )
+from ..services.appraisal import harvest_pending_appraisal
 from ..services.context_sanitizer import (
     heal_orphan_tool_results,
     prepare_payload_chain_for_send,
@@ -125,6 +126,7 @@ class _LoopState:
     is_final_timeout: bool = False
     history_images_injected: bool = False
     empty_reply_retries: int = 0
+    consecutive_interrupts: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -587,7 +589,13 @@ async def execute_orchestrator(
             )
 
         try:
-            if config.buffer.interrupt_enabled and not transient_payloads:
+            interrupt_allowed = (
+                config.buffer.interrupt_enabled
+                and not transient_payloads
+                and loop_state.consecutive_interrupts
+                < config.buffer.max_consecutive_interrupts
+            )
+            if interrupt_allowed:
                 new_response, interrupt_msgs = await chatter._send_interruptable(
                     response,
                     config,
@@ -595,6 +603,18 @@ async def execute_orchestrator(
                 )
                 if interrupt_msgs:
                     loop_state.extra_payload = None
+                    loop_state.consecutive_interrupts += 1
+                    # 打断后冷却递增（KFC 同款）：基准 ×(1+0.5×(n-1))，收集连发消息
+                    cooldown = float(config.buffer.interrupt_cooldown) * (
+                        1.0 + 0.5 * (loop_state.consecutive_interrupts - 1)
+                    )
+                    if cooldown > 0:
+                        logger.debug(
+                            f"[打断] 冷却 {cooldown:.1f}s"
+                            f"（连续打断 {loop_state.consecutive_interrupts}/"
+                            f"{config.buffer.max_consecutive_interrupts}）"
+                        )
+                        await asyncio.sleep(cooldown)
                     # 先 flush 上一轮已处理的 unread，避免与打断消息混入同一批
                     await chatter.flush_unreads(unread_msgs or [])
                     # 把打断消息内容持久化到 mental_log（add_user_message），
@@ -624,6 +644,15 @@ async def execute_orchestrator(
                     continue
                 response = new_response
             else:
+                if (
+                    config.buffer.interrupt_enabled
+                    and loop_state.consecutive_interrupts
+                    >= config.buffer.max_consecutive_interrupts
+                ):
+                    logger.warning(
+                        f"[打断] 连续打断已达上限 {config.buffer.max_consecutive_interrupts}，"
+                        "本次不再打断，等待 LLM 正常完成后统一处理"
+                    )
                 if transient_payloads:
                     response = await send_target.send(
                         auto_append_response=True,
@@ -679,10 +708,16 @@ async def execute_orchestrator(
             yield Failure("LLM 请求失败", exc)
             break
 
-        # LLM 请求成功，重置连续失败计数
+        # LLM 请求成功，重置连续失败计数与打断连击计数
         loop_state.consecutive_llm_failures = 0
+        loop_state.consecutive_interrupts = 0
         heal_orphan_tool_results(response, where="post-send")
         loop_state.extra_payload = None
+
+        # ── 收割与主请求并行的 S1 评估（副决策，非阻塞）──
+        # 已完成则状态即刻落地；未完成则留在槽位，由下一轮
+        # prepare_turn_input 收割或丢弃——绝不为它等待。
+        harvest_pending_appraisal(session, config)
 
         call_list = coerce_call_list(response)
         if call_list:
@@ -728,12 +763,13 @@ async def execute_orchestrator(
             )
 
         # ── 空回复打回重试 ──
-        # 模型调用了 nfc_reply 但 content 为空（空包弹），且感知草稿
-        # 回填也未能补上有效文本时，注入提示要求模型重新生成。
+        # 模型调用了 nfc_reply 但没有产生任何可见文本（空包弹，包括
+        # content 为空被执行层拒发、reply_execution_failed 已置位的情形）
+        # 时，注入提示要求模型重新生成。真正的"有文本但发送失败"不会
+        # 进入本循环——那时 visible_reply_segments 非空，第二个条件已排除。
         while (
             decision.has_reply_action
             and not decision.visible_reply_segments
-            and not decision.reply_execution_failed
             and loop_state.empty_reply_retries < config.general.max_empty_reply_retries
             and config.general.max_empty_reply_retries > 0
         ):

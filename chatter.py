@@ -183,7 +183,22 @@ class NeoFatumChatter(BaseChatter):
                     break
             return n in _blocked
 
-        return [u for u in llm_usables if not _is_reply_tool(u)]
+        def _stable_sort_key(u: Any) -> str:
+            # 按组件签名稳定排序，避免工具顺序在多轮请求间抖动破坏前缀缓存
+            signature = getattr(u, "get_signature", None)
+            if callable(signature):
+                try:
+                    sig = str(signature() or "")
+                    if sig:
+                        return sig
+                except Exception:
+                    pass
+            return str(getattr(u, "__name__", "") or getattr(u, "name", "") or "")
+
+        return sorted(
+            (u for u in llm_usables if not _is_reply_tool(u)),
+            key=_stable_sort_key,
+        )
 
     # ── 核心对话循环 ──────────────────────────────────────────
 
@@ -667,6 +682,8 @@ class NeoFatumChatter(BaseChatter):
             elapsed_seconds=elapsed,
         )
         session.mental_log.add(entry)
+        # 内驱：及时回应让情绪回暖、被忽视感消散；迟到则相反
+        session.drives.on_reply_timing(in_time=(event_type == NFCEventType.REPLY_IN_TIME))
 
     # ── 调试日志方法 ────────────────────────────────────────
 
