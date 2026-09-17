@@ -19,10 +19,13 @@ for _p in (str(_REPO_ROOT), str(_PLUGINS_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from neo_fatum_chatter.config import NFCConfig
-from neo_fatum_chatter.domain.session_state import NFCSession
-from neo_fatum_chatter.domain.world import WorldTracker
-from neo_fatum_chatter.services.appraisal import AppraisalResult, apply_appraisal
+# sys.path 注入必须先于插件模块导入，E402 在此为有意为之。
+from neo_fatum_chatter.config import NFCConfig  # noqa: E402
+from neo_fatum_chatter.domain.session_state import NFCSession  # noqa: E402
+from neo_fatum_chatter.services.appraisal import (  # noqa: E402
+    AppraisalResult,
+    apply_appraisal,
+)
 
 
 def banner(title: str) -> None:

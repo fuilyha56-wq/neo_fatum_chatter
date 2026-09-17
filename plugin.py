@@ -21,6 +21,8 @@ from .actions.reply import NFCReplyAction
 from .actions.proactive_control import QueryProactiveStatusAction, SetProactiveEnabledAction
 from .actions.schedule_proactive import ScheduleProactiveAction
 from .actions.update_habit import UpdateHabitAction
+from .actions.update_world import UpdateWorldAction
+from .actions.manage_schedule import ManageScheduleAction
 from .chatter import NeoFatumChatter
 from .config import NFCConfig
 from .handlers.proactive_handler import ProactiveHandler
@@ -40,9 +42,6 @@ class NFCPlugin(BasePlugin):
     """NeoFatumChatter 插件。"""
 
     plugin_name = "neo_fatum_chatter"
-    plugin_version = "2.6.5"
-    plugin_author = "Lycoris"
-    plugin_description = "内稳态双系统聊天器：心理活动流 + 内驱状态 + 双登记簿世界 + 信念记忆"
     configs = [NFCConfig]
 
     _session_store: NFCSessionStore
@@ -51,6 +50,7 @@ class NFCPlugin(BasePlugin):
         super().__init__(config)
         max_log_entries = config.prompt.max_log_entries if config else 50
         self._session_store = NFCSessionStore(max_log_entries=max_log_entries)
+        self._startup_task_ids: set[str] = set()
 
     @property
     def session_store(self) -> NFCSessionStore:
@@ -75,20 +75,39 @@ class NFCPlugin(BasePlugin):
             await self._preload_vlm_skip()
 
         # 延迟注册调度器任务：等待调度器启动
-        get_task_manager().create_task(
+        task_manager = get_task_manager()
+        scheduler_task = task_manager.create_task(
             self._delayed_scheduler_register(),
             name="NFC_scheduler_init",
             daemon=True,
         )
+        self._startup_task_ids.add(scheduler_task.task_id)
 
         # 延迟执行对话中断恢复检查
-        get_task_manager().create_task(
+        recovery_task = task_manager.create_task(
             self._check_interrupted_sessions(),
             name="NFC_session_recovery",
             daemon=True,
         )
+        self._startup_task_ids.add(recovery_task.task_id)
 
         logger.info("NFC 插件已加载")
+
+    async def on_plugin_unloaded(self) -> None:
+        """取消启动任务并移除 NFC 拥有的周期调度。"""
+        task_manager = get_task_manager()
+        for task_id in tuple(self._startup_task_ids):
+            task_manager.cancel_task(task_id)
+        self._startup_task_ids.clear()
+
+        try:
+            from src.kernel.scheduler import get_unified_scheduler
+
+            scheduler = get_unified_scheduler()
+            await self._remove_scheduler_tasks(scheduler)
+        except Exception as exc:
+            logger.debug(f"NFC 卸载时清理调度任务失败: {exc}")
+        logger.info("NFC 插件后台任务已清理")
 
     async def _delayed_scheduler_register(self) -> None:
         """延迟注册调度器任务，等待调度器启动（指数退避，最多 30 秒）。"""
@@ -174,6 +193,16 @@ class NFCPlugin(BasePlugin):
         except Exception as e:
             logger.warning(f"获取 Scheduler 失败: {e}")
             return
+        if not getattr(scheduler, "_running", False):
+            logger.debug("Scheduler 尚未运行，跳过 NFC 后台任务刷新")
+            return
+
+        # 热更新或重复注册前先移除旧闭包，确保新配置立即生效。
+        await self._remove_scheduler_tasks(scheduler)
+
+        if not config.general.enabled:
+            logger.info("NFC 已关闭，后台调度任务已移除")
+            return
 
         # 主动发起检查
         if config.proactive.enabled:
@@ -188,15 +217,33 @@ class NFCPlugin(BasePlugin):
                 """定期检查是否需要主动发起。"""
                 triggered = await proactive.check_all_sessions()
                 for stream_id in triggered:
-                    scheduled_reason = await proactive.mark_triggered(stream_id)
-                    logger.info(f"主动发起触发: {stream_id[:8]}")
-                    # 通过事件 API 触发 chatter
+                    candidate_key, scheduled_reason = await proactive.prepare_trigger(stream_id)
+                    if not candidate_key:
+                        continue
+                    logger.info(f"主动发起准备投递: {stream_id[:8]}")
+                    # 通过事件 API 触发 chatter；只有事件总线确认成功后才结算。
                     from src.app.plugin_system.api.event_api import publish_event
 
-                    await publish_event(
-                        "NFC.proactive_trigger",
-                        {"stream_id": stream_id, "scheduled_reason": scheduled_reason},
+                    delivered = False
+                    try:
+                        result = await publish_event(
+                            "NFC.proactive_trigger",
+                            {
+                                "stream_id": stream_id,
+                                "scheduled_reason": scheduled_reason,
+                                "candidate_key": candidate_key,
+                            },
+                        )
+                        decision = result.get("decision") if isinstance(result, dict) else None
+                        decision_value = getattr(decision, "value", str(decision))
+                        delivered = decision_value in {"SUCCESS", "STOP"}
+                    except Exception as exc:
+                        logger.warning(f"主动发起事件投递失败: stream={stream_id[:8]}: {exc}")
+                    await proactive.settle_trigger(
+                        stream_id, candidate_key, delivered=delivered
                     )
+                    if delivered:
+                        logger.info(f"主动发起触发: {stream_id[:8]}")
 
             # 注册周期性主动发起检查任务
             await scheduler.create_schedule(
@@ -239,6 +286,13 @@ class NFCPlugin(BasePlugin):
             )
 
         logger.info("NFC 调度器任务注册完成")
+
+    @staticmethod
+    async def _remove_scheduler_tasks(scheduler: UnifiedScheduler) -> None:
+        for task_name in ("NFC_proactive_check", "NFC_drive_tick"):
+            schedule_id = await scheduler.find_schedule_by_name(task_name)
+            if schedule_id:
+                await scheduler.remove_schedule(schedule_id)
 
     async def _check_interrupted_sessions(self) -> None:
         """进程重启后检查是否有中断的对话需要恢复。
@@ -343,6 +397,8 @@ class NFCPlugin(BasePlugin):
             RecordHabitAction,
             QueryHabitsAction,
             UpdateHabitAction,
+            UpdateWorldAction,
+            ManageScheduleAction,
             RemoveHabitAction,
             NFCMemoAction,
             NFCMemoDeleteAction,
@@ -383,6 +439,7 @@ class NFCPlugin(BasePlugin):
         from .prompts.modules import register_nfc_prompts
 
         register_nfc_prompts()
+        await self._register_scheduler_tasks()
 
         registry = get_global_registry()
         state_manager = get_global_state_manager()

@@ -6,7 +6,6 @@ import time
 
 from neo_fatum_chatter.config import NFCConfig
 from neo_fatum_chatter.context.sources.state_source import build_state_contributions
-from neo_fatum_chatter.domain.beliefs import BeliefBook
 from neo_fatum_chatter.domain.drives import DriveState
 from neo_fatum_chatter.domain.session_state import NFCSession
 from neo_fatum_chatter.domain.world import WorldTracker
@@ -14,9 +13,11 @@ from neo_fatum_chatter.execution.reply_executor import compute_segment_delay
 
 
 def test_state_contributions_empty_when_all_neutral() -> None:
+    """中性状态下只剩世界状态块：角色的日常始终在场（日程化世界状态）。"""
     session = NFCSession(user_id="u", stream_id="s")
     config = NFCConfig()
-    assert build_state_contributions(session, config) == []
+    contributions = build_state_contributions(session, config)
+    assert {c.source for c in contributions} == {"nfc.world_state"}
 
 
 def test_state_contributions_include_drives_and_beliefs() -> None:
@@ -55,7 +56,8 @@ def test_state_contributions_include_character_card_layers() -> None:
     contributions = build_state_contributions(session, config)
     card = [c for c in contributions if c.source == "nfc.character_card"]
     assert card
-    assert "不会发语音" in card[0].content
+    # 红线不再走 turn 级 contribution：已并入系统提示词安全节（见 modules.py）
+    assert "不会发语音" not in card[0].content
     assert "秘密" not in card[0].content  # 隐藏事实内容不进 prompt
 
 

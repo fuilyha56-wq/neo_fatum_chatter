@@ -367,8 +367,12 @@ def apply_appraisal(session: Any, appraisal: AppraisalResult, *, config: Any) ->
                 )
                 if len(session.scene_state.evidence) > 20:
                     session.scene_state.evidence = session.scene_state.evidence[-20:]
+                session.scene_state.revision += 1
+                session.scene_state.updated_at = now
             if session.scene_state.certainty == "unknown":
                 session.scene_state.certainty = "weak"
+                session.scene_state.revision += 1
+                session.scene_state.updated_at = now
             applied.append(f"facts:{len(appraisal.world_facts)}")
 
     # 3. 剧情事实更新
@@ -378,6 +382,8 @@ def apply_appraisal(session: Any, appraisal: AppraisalResult, *, config: Any) ->
         and session.story_world is not None
     ):
         if session.story_world.story.update(appraisal.story_update):
+            session.story_world.revision += 1
+            session.story_world.updated_at = now
             applied.append("story_update")
 
     # 4. 话题钩子与承诺 → 意图队列

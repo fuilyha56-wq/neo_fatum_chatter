@@ -49,6 +49,57 @@ def _config() -> SimpleNamespace:
     )
 
 
+class _RequiredTool:
+    """用于验证插件侧缺参拦截的最小工具。"""
+
+    @classmethod
+    def get_signature(cls) -> str:
+        return "test:tool:required"
+
+    async def execute(self, content: str, output_filename: str) -> tuple[bool, str]:
+        raise AssertionError("缺参调用不应进入 execute")
+
+
+class _RequiredRegistry(_Registry):
+    def get(self, name: str) -> Any:
+        if name in {"required", "action-required"}:
+            return _RequiredTool
+        return None
+
+
+@pytest.mark.asyncio
+async def test_missing_required_arguments_are_returned_as_tool_result() -> None:
+    """坏工具调用应在 NFC 插件层隔离，并保留 call_id 配对。"""
+    call = ToolCall(id="missing-1", name="required", args={"content": "图"})
+    response = _response([call])
+    executed = False
+
+    async def run_tool_call(*args: Any, **kwargs: Any) -> list[tuple[bool, bool]]:
+        nonlocal executed
+        executed = True
+        return [(True, True)]
+
+    result = await parse_tool_calls(
+        response,
+        _RequiredRegistry(),
+        SimpleNamespace(),
+        _config(),
+        run_tool_call_fn=run_tool_call,
+    )
+
+    assert executed is False
+    assert result.execution_success_by_call_id["missing-1"] is False
+    tool_results = [
+        part
+        for payload in response.payloads
+        if payload.role == ROLE.TOOL_RESULT
+        for part in payload.content
+        if isinstance(part, ToolResult)
+    ]
+    assert len(tool_results) == 1
+    assert tool_results[0].call_id == "missing-1"
+    assert "output_filename" in str(tool_results[0].value)
+
 @pytest.mark.asyncio
 async def test_duplicate_call_ids_are_normalized_before_execution() -> None:
     """同一响应内重复 call_id 必须在产生副作用前改成唯一值。"""

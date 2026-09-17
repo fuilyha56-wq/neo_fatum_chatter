@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import uuid
@@ -169,6 +170,50 @@ def _extract_args(raw_args: Any) -> dict[str, Any]:
             return {}
         return dict(parsed) if isinstance(parsed, dict) else {}
     return {}
+
+
+def _required_tool_arguments(usable_cls: Any) -> set[str]:
+    """读取工具 execute 的无默认值参数，失败时返回空集合。"""
+    execute = getattr(usable_cls, "execute", None)
+    if not callable(execute):
+        return set()
+    try:
+        signature = inspect.signature(execute)
+    except (TypeError, ValueError):
+        return set()
+    return {
+        parameter.name
+        for parameter in signature.parameters.values()
+        if parameter.name != "self"
+        and parameter.kind
+        not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        and parameter.default is inspect.Parameter.empty
+    }
+
+
+def _missing_tool_arguments(call: ToolCall, usable_map: Any) -> list[str]:
+    """返回当前调用缺失的必填参数名。"""
+    get_tool = getattr(usable_map, "get", None)
+    if not callable(get_tool):
+        return []
+    try:
+        usable_cls = get_tool(call.name)
+    except Exception:
+        return []
+    if usable_cls is None:
+        return []
+    args = call.args if isinstance(call.args, dict) else {}
+    return sorted(name for name in _required_tool_arguments(usable_cls) if name not in args)
+
+
+def _append_tool_result(response: Any, call: ToolCall, value: str) -> None:
+    """为插件侧拦截的调用写回配对结果，不进入底层 execute。"""
+    response.add_payload(
+        LLMPayload(
+            ROLE.TOOL_RESULT,
+            ToolResult(value=value, call_id=call.id, name=call.name),
+        )
+    )
 
 
 def _build_fallback_call_id(index: int, name: str) -> str:
@@ -353,8 +398,34 @@ async def parse_tool_calls(
     pending_third_party_calls: list[ToolCall] = []
     standardized_calls = _standardize_calls(coerce_call_list(response), usable_map)
     failed_call_ids: set[str] = set()
+    invalid_call_ids: set[str] = set()
     response.call_list = standardized_calls
     _sync_assistant_tool_calls(response, standardized_calls)
+
+    # 插件侧先拦截缺少必填参数的调用。底层执行器会直接以 kwargs 调用
+    # execute；将坏调用挡在这里，才能把可恢复的错误作为 TOOL_RESULT 回传模型。
+    for call in standardized_calls:
+        missing = _missing_tool_arguments(call, usable_map)
+        if not missing or call.id is None:
+            continue
+        invalid_call_ids.add(str(call.id))
+        result.execution_success_by_call_id[str(call.id)] = False
+        normalized_name = _normalize_call_name(call.name)
+        if normalized_name == NFC_REPLY:
+            result.has_reply = True
+        elif normalized_name == DO_NOTHING:
+            result.has_do_nothing = True
+        else:
+            result.has_third_party = True
+        _append_tool_result(
+            response,
+            call,
+            "执行未开始：缺少必填参数 " + ", ".join(missing)
+            + "。请补齐参数后重新调用。",
+        )
+        logger.warning(
+            f"[NFC] 拦截工具 {call.name}：缺少必填参数 {missing}"
+        )
 
     if any(_is_result_dependent_call(call) for call in standardized_calls):
         deferred_call_ids = {
@@ -435,6 +506,10 @@ async def parse_tool_calls(
 
     # 按原始顺序整理调用，遇到 reply / do_nothing 时仍由标准调度器执行。
     for index, call in enumerate(standardized_calls):
+        if call.id is not None and str(call.id) in invalid_call_ids:
+            if _is_result_dependent_call(call):
+                result.has_info_tool = True
+            continue
         args = dict(call.args) if isinstance(call.args, dict) else {}
         normalized_name = _normalize_call_name(call.name)
         reason = args.get("reason", "未提供原因")

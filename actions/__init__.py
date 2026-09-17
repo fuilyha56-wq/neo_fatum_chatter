@@ -20,6 +20,8 @@ from .remove_habit import RemoveHabitAction
 from .reply import NFCReplyAction
 from .proactive_control import QueryProactiveStatusAction, SetProactiveEnabledAction
 from .update_habit import UpdateHabitAction
+from .update_world import UpdateWorldAction
+from .manage_schedule import ManageScheduleAction
 
 __all__ = [
     "DoNothingAction",
@@ -33,4 +35,6 @@ __all__ = [
     "RemoveHabitAction",
     "SetProactiveEnabledAction",
     "UpdateHabitAction",
+    "UpdateWorldAction",
+    "ManageScheduleAction",
 ]

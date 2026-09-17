@@ -16,6 +16,7 @@ import inspect
 import json
 import random
 import re
+import uuid
 from typing import Any, Awaitable, Callable
 
 from src.app.plugin_system.api.log_api import get_logger
@@ -64,25 +65,29 @@ def compute_segment_delay(
     最后叠加 ±20% 抖动并夹到 [delay_min, delay_max]。
     """
     if chars_per_sec > 0:
-        base = len(next_segment) / chars_per_sec
+        typing_time = len(next_segment) / chars_per_sec
     else:
-        base = (delay_min + delay_max) / 2.0
+        typing_time = (delay_min + delay_max) / 2.0
 
+    # 只抖动打字时长，保留标点停顿的严格语义顺序：省略号 > 问句 > 陈述。
+    # 如果连停顿一起抖动，独立两次调用可能让较短的问句反超省略号。
+    jittered_typing_time = typing_time * random.uniform(0.8, 1.2)
+    pause = 0.0
     prev_tail = prev_segment[-3:] if prev_segment else ""
-    for marks, pause in _PUNCT_PAUSE:
+    for marks, value in _PUNCT_PAUSE:
         if any(mark in prev_tail for mark in marks):
-            base += pause
+            pause = value
             break
 
-    jitter = random.uniform(0.8, 1.2)
-    return max(delay_min, min(delay_max, base * jitter))
+    return max(delay_min, min(delay_max, jittered_typing_time + pause))
 
 
-def coerce_content_segments(content: list[str] | str | None) -> list[str]:
+def coerce_content_segments(content: Any) -> list[str]:
     """把模型传来的 content 统一规整成可发送文本段落。
 
     有些模型会把 ``content`` 错传成 JSON 字符串，例如 ``["在呢。"]``。
-    如果不先解析，就会把方括号和引号原样发出去。
+    如果不先解析，就会把方括号和引号原样发出去。``None``、空字典和
+    没有文本字段的对象视为空段落，不能被转换成字面量发送。
     """
     if content is None:
         return []
@@ -106,11 +111,15 @@ def coerce_content_segments(content: list[str] | str | None) -> list[str]:
             raw_items = parsed
         else:
             raw_items = [stripped]
-    else:
+    elif isinstance(content, (list, tuple)):
         raw_items = list(content)
+    else:
+        raw_items = [content]
 
     segments: list[str] = []
     for item in raw_items:
+        if item is None:
+            continue
         if isinstance(item, str):
             text = item.strip()
         elif isinstance(item, dict):
@@ -128,6 +137,16 @@ def coerce_content_segments(content: list[str] | str | None) -> list[str]:
             if part:
                 segments.append(part)
     return segments
+
+
+def clean_content_segments(content: Any) -> list[str]:
+    """返回实际可发送的文本段落，统一应用回复安全清洗。"""
+    cleaned: list[str] = []
+    for segment in coerce_content_segments(content):
+        text, _stripped_thinking, _stripped_metadata = sanitize_segment(segment)
+        if text:
+            cleaned.append(text)
+    return cleaned
 
 
 def sanitize_segment(segment: str) -> tuple[str, bool, bool]:
@@ -354,6 +373,10 @@ async def send_reply_segments(
     if not segments:
         return sent, True
 
+    batch_id = uuid.uuid4().hex[:10]
+    logger.debug(
+        f"分段发送批次开始: stream={stream_id[:8]} batch={batch_id} total={len(segments)}"
+    )
     delay_min = max(0.0, float(segment_delay_min))
     delay_max = max(delay_min, float(segment_delay_max))
 
@@ -395,14 +418,16 @@ async def send_reply_segments(
 
         if not success:
             logger.warning(
-                f"消息发送失败: stream={stream_id[:8]} "
+                f"消息发送失败: stream={stream_id[:8]} batch={batch_id} "
+                f"segment_index={index + 1}/{len(segments)} "
                 f"segment={segment[:50]}{'...' if len(segment) > 50 else ''}"
             )
             return sent, False
 
         sent.append(segment)
         logger.info(
-            f"消息已发送: stream={stream_id[:8]} "
+            f"消息已发送: stream={stream_id[:8]} batch={batch_id} "
+            f"segment_index={index + 1}/{len(segments)} "
             f"({len(sent)}/{len(segments)}) "
             f"{segment[:60]}{'...' if len(segment) > 60 else ''}"
         )

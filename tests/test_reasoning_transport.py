@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -356,7 +357,8 @@ async def test_tool_result_followup_passes_reasoning_text_back(
             "api_provider": "cli",
             "base_url": "https://example.invalid/v1",
             "model_identifier": "deepseek-v4-flash",
-            "api_key": "test-key",
+            # 假客户端不会真正连网；密钥现场生成，避免任何字面凭据
+            "api_key": secrets.token_hex(16),
             "client_type": "openai",
             "max_retry": 0,
             "timeout": 30,

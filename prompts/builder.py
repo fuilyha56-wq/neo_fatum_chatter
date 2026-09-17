@@ -156,9 +156,11 @@ class NFCPromptBuilder:
 
         # 末尾工具调用强化提示（与 plan_user_turn 保持一致）
         timeout_text += (
-            "\n\n---\n重申：你的响应必须仅包含工具调用（nfc_reply 或 do_nothing），不要在文本区域输出任何内容。"
-            "调用 nfc_reply 时 content 必须是至少一段要发送给对方的可见文本；"
+            "\n\n---\n重申：你的响应必须通过工具调用执行，不要在文本区域输出任何内容。"
+            "发送消息用 nfc_reply，content 必须是至少一段要发送给对方的可见文本；"
             "不想说话就调用 do_nothing，绝不要用空 content 调用 nfc_reply。"
+            "除这两个基础动作外，你也可以在同一响应中按需组合调用其他已注册工具"
+            "（如发图、表情包等），它们会按你给出的顺序依次执行。"
         )
 
         return LLMPayload(ROLE.USER, Text(timeout_text))

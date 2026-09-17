@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from ...domain.scene_state import SceneState
-from .scene_source import build_scene_state_info
 from ..types import InitialContextPlan
 
 
@@ -29,13 +27,11 @@ def build_initial_context_plan(
     if custom_prompt:
         extra_vars["custom_decision_prompt"] = f"# 决策指导\n{custom_prompt}"
 
+    # 场景/世界状态不再进系统提示词：旧的 SceneState 块已被日程化世界状态
+    # 取代，并随内部状态贡献以 turn 级 transient payload 注入（见
+    # state_source.build_state_contributions），避免动态内容污染
+    # system prompt 前缀缓存。
     dynamic_sections: list[str] = []
-    scene_state_info = build_scene_state_info(
-        chat_stream=chat_stream,
-        scene_state=getattr(session, "scene_state", None) or SceneState(),
-    ).strip()
-    if scene_state_info:
-        dynamic_sections.append(scene_state_info)
 
     sched_at = getattr(session, "scheduled_proactive_at", None)
     if sched_at:

@@ -37,6 +37,26 @@ def build_state_contributions(
                 )
             )
 
+    # 世界状态（现实登记簿）：日程化日常 + 场景证据。
+    # 设计移植自 private_companion：按五段日程窗口与作息锚点推导
+    # "此刻在做什么"，角色自述/观察等事实级条目优先于作息推断。
+    # story 登记簿激活时不渲染——剧情世界有自己的状态块。
+    world_cfg = getattr(config, "world", None)
+    if (world_cfg is None or world_cfg.enabled) and (
+        getattr(session, "active_register", "reality") != "story"
+    ):
+        world_text = _build_world_state_text(session, world_cfg)
+        if world_text:
+            contributions.append(
+                ContextContribution(
+                    source="nfc.world_state",
+                    owner="self_state",
+                    scope="turn",
+                    priority=65,
+                    content=world_text,
+                )
+            )
+
     # 剧情世界（story 登记簿激活时）
     story_world = getattr(session, "story_world", None)
     if (
@@ -75,7 +95,7 @@ def build_state_contributions(
                 )
             )
 
-    # 角色卡（覆层 / 隐藏事实 / 红线）
+    # 角色卡（覆层 / 隐藏事实）；红线已并入系统提示词安全节，不再单独渲染
     char_cfg = getattr(config, "character", None)
     if char_cfg is not None:
         from ...domain.character_card import CharacterCard
@@ -110,3 +130,62 @@ def build_state_contributions(
             )
 
     return contributions
+
+
+def _build_world_state_text(session: NFCSession, world_cfg: Any) -> str:
+    """组装现实登记簿世界状态块：日程化日常 + 已确认场景证据。"""
+    from ...domain.daily_life import parse_clock
+
+    daily_life = session.daily_life
+    # 先滚动并收口过期条目，再同步配置默认值，避免临时位置失效后
+    # 当前轮仍遗漏持久化默认位置。
+    daily_life.ensure_day()
+
+    # 配置同步（幂等）：锚点/位置/作息模板以配置为准
+    if world_cfg is not None:
+        wake = parse_clock(getattr(world_cfg, "wake_time", "") or "")
+        sleep = parse_clock(getattr(world_cfg, "sleep_time", "") or "")
+        if wake >= 0:
+            daily_life.wake_minute = wake
+        if sleep >= 0:
+            daily_life.sleep_minute = sleep
+        default_location = str(getattr(world_cfg, "location", "") or "").strip()
+        if default_location and not daily_life.location:
+            daily_life.location = default_location[:40]
+        routine = getattr(world_cfg, "routine", None)
+        if isinstance(routine, dict) and routine:
+            from ...domain.daily_life import normalize_window
+
+            daily_life.routine = {
+                normalize_window(key): str(value or "").strip()
+                for key, value in routine.items()
+                if normalize_window(key) and str(value or "").strip()
+            }
+
+    world_text = daily_life.render_world_text()
+
+    # 场景证据：S1 评估等来源确认的现实事实（防幻觉语义保留）
+    scene = getattr(session, "scene_state", None)
+    evidence_lines: list[str] = []
+    for item in (scene.evidence if scene is not None else [])[-6:]:
+        if not item.content.strip():
+            continue
+        confidence = max(0.0, min(1.0, float(item.confidence)))
+        if confidence >= 0.9 and getattr(scene, "certainty", "unknown") == "confirmed":
+            label = "已确认"
+        elif confidence >= 0.6:
+            label = "对话线索"
+        else:
+            label = "不确定线索"
+        evidence_lines.append(f"- [{label}] {item.content}")
+
+    sections: list[str] = []
+    if world_text:
+        sections.append(world_text)
+    if evidence_lines:
+        sections.append(
+            "# 现实场景证据（按置信度分级）\n"
+            + "\n".join(evidence_lines)
+            + "\n- 以上内容来自对话证据；线索不等于确认事实，未提及的环境细节一律不要臆造。"
+        )
+    return "\n\n".join(sections)

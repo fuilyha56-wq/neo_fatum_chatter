@@ -14,6 +14,7 @@ from ..snapshot import (
     capture_payload_snapshot,
     restore_payload_snapshot,
 )
+from ..services.context_sanitizer import repair_post_send_chain
 
 logger = get_logger("NFC_request_snapshot")
 
@@ -24,8 +25,8 @@ _NON_HISTORY_ROLES = {"system", "tool"}
 class NFCRequestSnapshotHandler(BaseEventHandler):
     """在 NFC 请求发送前保存并在冷启动首个请求恢复完整 payload 链。"""
 
-    handler_name = "nfc_request_snapshot_handler"
-    handler_description = "保存并恢复 NFC 的完整 LLM 请求体"
+    name = "nfc_request_snapshot_handler"
+    description = "保存并恢复 NFC 的完整 LLM 请求体"
     display_name = "请求体恢复"
     weight = 20
     intercept_message = False
@@ -78,6 +79,10 @@ class NFCRequestSnapshotHandler(BaseEventHandler):
                 self._restored_streams.add(stream_id)
                 setattr(session, "_nfc_request_snapshot_restored", True)
 
+            holder = type("SnapshotPayloadHolder", (), {"payloads": payloads})()
+            repair_post_send_chain(holder, reason="snapshot-capture")
+            payloads = holder.payloads
+            params["payloads"] = payloads
             snapshot = capture_payload_snapshot(stream_id, payloads)
             if snapshot is not None:
                 session.request_snapshot = snapshot.to_dict()

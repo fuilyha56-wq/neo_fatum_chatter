@@ -111,6 +111,7 @@ class WorldState:
     evidence: list[SceneEvidence] = field(default_factory=list)
     story: StoryFacts = field(default_factory=StoryFacts)
     updated_at: float = 0.0
+    revision: int = 0
 
     @classmethod
     def new_story(cls) -> WorldState:
@@ -118,6 +119,7 @@ class WorldState:
         state.certainty = "confirmed"  # 剧情世界是被授权虚构的
         state.device_assumption_allowed = True
         state.updated_at = time.time()
+        state.revision = 1
         return state
 
     @classmethod
@@ -130,7 +132,8 @@ class WorldState:
             location_type=scene.location_type,
             device_assumption_allowed=scene.device_assumption_allowed,
             evidence=list(scene.evidence),
-            updated_at=time.time(),
+            updated_at=float(getattr(scene, "updated_at", 0.0) or 0.0),
+            revision=max(0, int(getattr(scene, "revision", 0) or 0)),
         )
 
     def add_evidence(self, source: str, content: str, kind: str, confidence: float) -> bool:
@@ -142,6 +145,7 @@ class WorldState:
             if item.content == text:
                 item.confidence = min(1.0, max(item.confidence, confidence))
                 self.updated_at = time.time()
+                self.revision += 1
                 return False
         self.evidence.append(
             SceneEvidence(
@@ -154,6 +158,7 @@ class WorldState:
         if len(self.evidence) > _MAX_STORY_EVIDENCE:
             self.evidence = self.evidence[-_MAX_STORY_EVIDENCE:]
         self.updated_at = time.time()
+        self.revision += 1
         return True
 
     def has_story_content(self) -> bool:
@@ -203,6 +208,7 @@ class WorldState:
             ],
             "story": self.story.to_dict(),
             "updated_at": self.updated_at,
+            "revision": self.revision,
         }
 
     @classmethod
@@ -238,6 +244,7 @@ class WorldState:
                 )
         state.story = StoryFacts.from_dict(data.get("story"))
         state.updated_at = _as_float(data.get("updated_at"), 0.0)
+        state.revision = max(0, int(_as_float(data.get("revision"), 0.0)))
         return state
 
 
@@ -250,6 +257,7 @@ class StoryArchiveEntry:
     saved_at: float
     world: dict[str, Any]
     overlay_name: str = ""
+    overlay_state: dict[str, Any] = field(default_factory=dict)
     summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -259,6 +267,7 @@ class StoryArchiveEntry:
             "saved_at": self.saved_at,
             "world": self.world,
             "overlay_name": self.overlay_name,
+            "overlay_state": dict(self.overlay_state),
             "summary": self.summary,
         }
 
@@ -272,9 +281,42 @@ class StoryArchiveEntry:
             saved_at=_as_float(data.get("saved_at"), time.time()),
             world=data.get("world") if isinstance(data.get("world"), dict) else {},
             overlay_name=str(data.get("overlay_name", "") or ""),
+            overlay_state=(
+                dict(data.get("overlay_state"))
+                if isinstance(data.get("overlay_state"), dict)
+                else ({"name": str(data.get("overlay_name", "") or "")} if data.get("overlay_name") else {})
+            ),
             summary=str(data.get("summary", "") or ""),
         )
         return entry
+
+
+@dataclass(slots=True)
+class RealityWorldView:
+    """现实登记簿的结构化融合视图。
+
+    ``scene_state`` 与 ``daily_life`` 仍各自保存；该视图只为查询者提供带
+    来源/认知等级的只读快照，避免调用方遗漏角色日常状态。
+    """
+
+    register: str
+    current_activity: dict[str, Any] | None
+    location: str
+    plan_items: list[dict[str, Any]]
+    scene_evidence: list[dict[str, Any]]
+    revision: int
+    updated_at: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "register": self.register,
+            "current_activity": dict(self.current_activity) if self.current_activity else None,
+            "location": self.location,
+            "plan_items": [dict(item) for item in self.plan_items],
+            "scene_evidence": [dict(item) for item in self.scene_evidence],
+            "revision": self.revision,
+            "updated_at": self.updated_at,
+        }
 
 
 class WorldTracker:
@@ -293,6 +335,8 @@ class WorldTracker:
         if event == "enter_story":
             if getattr(session, "story_world", None) is not None:
                 session.active_register = REGISTER_STORY
+                session.story_world.revision += 1
+                session.story_world.updated_at = time.time()
                 return "剧情恢复（沿用暂停中的故事世界）"
             session.story_world = WorldState.new_story()
             session.active_register = REGISTER_STORY
@@ -302,10 +346,15 @@ class WorldTracker:
             if getattr(session, "story_world", None) is None:
                 return "无可恢复的故事"
             session.active_register = REGISTER_STORY
+            session.story_world.revision += 1
+            session.story_world.updated_at = time.time()
             return "剧情恢复"
 
         if event == "pause_story":
             session.active_register = REGISTER_REALITY
+            if getattr(session, "story_world", None) is not None:
+                session.story_world.revision += 1
+                session.story_world.updated_at = time.time()
             return "剧情暂停（世界保留，随时可回来）"
 
         if event == "exit_story":
@@ -338,6 +387,7 @@ class WorldTracker:
                             if isinstance(overlay, dict)
                             else ""
                         ),
+                        overlay_state=dict(overlay) if isinstance(overlay, dict) else {},
                         summary=story_summary[:500],
                     )
                 )
@@ -361,9 +411,53 @@ class WorldTracker:
             if entry.id == archive_id:
                 session.story_world = WorldState.from_dict(entry.world)
                 session.story_world.updated_at = time.time()
+                session.story_world.revision += 1
                 session.active_register = REGISTER_STORY
+                char_state = getattr(session, "character_state", None)
+                if not isinstance(char_state, dict):
+                    char_state = {}
+                    session.character_state = char_state
+                # 恢复存档时显式覆盖 overlay；没有 overlay 的旧存档也必须
+                # 清除当前临时覆层，避免人格状态从另一个故事泄漏进来。
+                char_state["active_overlay"] = (
+                    dict(entry.overlay_state) if entry.overlay_state else None
+                )
                 return f"已恢复故事「{entry.title}」"
         return "未找到该故事存档"
+
+    @staticmethod
+    def reality_view(session: Any, *, ts: float | None = None) -> RealityWorldView:
+        """返回带 epistemic/source 标签的现实融合快照。"""
+        daily = getattr(session, "daily_life", None)
+        current = daily.current_activity(ts) if daily is not None else None
+        plan_items = []
+        if daily is not None:
+            daily.ensure_day(ts)
+            for item in daily.plan_items:
+                if item.source == "planned" and item.is_active:
+                    plan_items.append({
+                        "item_id": item.item_id,
+                        "activity": item.activity,
+                        "status": item.status,
+                        "source": item.source,
+                        "epistemic_status": item.epistemic_status,
+                        "evidence_level": item.evidence_level,
+                        "revision": item.revision,
+                    })
+        scene = getattr(session, "scene_state", None)
+        evidence = [item.to_dict() for item in getattr(scene, "evidence", [])]
+        world = WorldState.from_scene_state(scene) if scene is not None else WorldState()
+        daily_revision = int(getattr(daily, "revision", 0)) if daily is not None else 0
+        daily_updated_at = float(getattr(daily, "updated_at", 0.0)) if daily is not None else 0.0
+        return RealityWorldView(
+            register=REGISTER_REALITY,
+            current_activity=current,
+            location=(getattr(daily, "location", "") if daily is not None else ""),
+            plan_items=plan_items[-12:],
+            scene_evidence=evidence[-20:],
+            revision=world.revision + daily_revision,
+            updated_at=max(world.updated_at, daily_updated_at),
+        )
 
     @staticmethod
     def active_world(session: Any) -> WorldState:

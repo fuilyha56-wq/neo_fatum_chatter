@@ -12,13 +12,25 @@ from ..types import ContextContribution, ContextOwner, ContextScope
 logger = get_logger("NFC_context_plugin_source")
 
 _VALID_CONTEXT_OWNERS = frozenset(get_args(ContextOwner))
-_VALID_CONTEXT_SCOPES = frozenset(get_args(ContextScope))
+_SUPPORTED_CONTEXT_SCOPES = frozenset({"turn", "session"})
 
 
 def _normalize_context_contribution(raw: Any) -> ContextContribution | None:
     """将第三方返回值归一化为 ContextContribution。"""
     if isinstance(raw, ContextContribution):
-        return raw
+        if raw.scope in _SUPPORTED_CONTEXT_SCOPES:
+            return raw
+        # persistent 目前没有持久化执行器，显式降级为本轮贡献，
+        # 避免第三方误以为状态已经写入 NFC session。
+        return ContextContribution(
+            source=raw.source,
+            owner=raw.owner,
+            scope="turn",
+            priority=raw.priority,
+            ttl_turns=raw.ttl_turns,
+            content=raw.content,
+            evidence_only=raw.evidence_only,
+        )
     if not isinstance(raw, dict):
         return None
 
@@ -30,7 +42,7 @@ def _normalize_context_contribution(raw: Any) -> ContextContribution | None:
         owner = str(raw.get("owner", "notice") or "notice")
         scope = str(raw.get("scope", "turn") or "turn")
         normalized_owner = owner if owner in _VALID_CONTEXT_OWNERS else "notice"
-        normalized_scope = scope if scope in _VALID_CONTEXT_SCOPES else "turn"
+        normalized_scope = scope if scope in _SUPPORTED_CONTEXT_SCOPES else "turn"
 
         return ContextContribution(
             source=str(raw.get("source", "plugin.on_prompt_build") or "plugin.on_prompt_build"),
@@ -65,25 +77,46 @@ async def collect_plugin_turn_contributions(
         from src.kernel.event import get_event_bus
 
         event_bus = get_event_bus()
-        if not event_bus.get_subscribers("on_prompt_build"):
+        subscribers = event_bus.get_subscribers("on_prompt_build")
+        if not subscribers:
+            logger.debug(
+                f"on_prompt_build 无订阅者: prompt={prompt_name}, "
+                f"stream_id_present={bool(str(stream_id or '').strip())}"
+            )
             return []
 
         template = "{content}\n{extra}"
-        values: dict[str, Any] = {"content": content, "extra": "", "stream_id": stream_id}
+        values: dict[str, Any] = {
+            "content": content,
+            "extra": "",
+            "stream_id": stream_id,
+        }
+        event_params: dict[str, Any] = {
+            # name 是当前框架规范字段；prompt_name 是早期注入器使用的别名。
+            # 两者都在初始参数中预置，避免 EventBus 的 key 签名校验丢弃 legacy handler。
+            "name": prompt_name,
+            "prompt_name": prompt_name,
+            "template": template,
+            "values": values,
+            "policies": {},
+            "strict": False,
+            "context_contributions": [],
+        }
         _, final_params = await event_bus.publish(
             "on_prompt_build",
-            {
-                "name": prompt_name,
-                "template": template,
-                "values": values,
-                "policies": {},
-                "strict": False,
-                "context_contributions": [],
-            },
+            event_params,
         )
 
+        if not isinstance(final_params, dict):
+            logger.warning("on_prompt_build 返回参数不是 dict，忽略本轮注入")
+            return []
+
         contributions: list[ContextContribution] = []
-        for raw in final_params.get("context_contributions", []) or []:
+        raw_contributions = final_params.get("context_contributions", [])
+        if not isinstance(raw_contributions, list):
+            logger.debug("on_prompt_build context_contributions 不是 list，忽略该通道")
+            raw_contributions = []
+        for raw in raw_contributions:
             normalized = _normalize_context_contribution(raw)
             if normalized is not None:
                 contributions.append(normalized)
@@ -102,6 +135,11 @@ async def collect_plugin_turn_contributions(
                 )
             )
 
+        logger.debug(
+            f"on_prompt_build 已收集贡献: prompt={prompt_name}, "
+            f"subscribers={len(subscribers)}, contributions={len(contributions)}, "
+            f"stream_id_present={bool(str(stream_id or '').strip())}"
+        )
         return contributions
     except Exception as exc:
         logger.warning(f"on_prompt_build 注入失败，将忽略额外上下文: {exc}")

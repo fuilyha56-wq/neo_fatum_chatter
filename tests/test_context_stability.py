@@ -7,7 +7,11 @@ from types import SimpleNamespace
 from src.kernel.llm import LLMPayload, ROLE, Text, ToolCall, ToolResult
 
 from neo_fatum_chatter.context.renderer import ContextRenderer
-from neo_fatum_chatter.runtime.request_view import _without_transient_payloads
+from neo_fatum_chatter.runtime.request_view import (
+    _without_transient_payloads,
+    build_request_view,
+    strip_transient_payloads,
+)
 from neo_fatum_chatter.services.context_sanitizer import heal_orphan_tool_results
 
 
@@ -33,6 +37,7 @@ def test_without_transient_payloads_removes_extra_user_keeps_assistant() -> None
     result = _without_transient_payloads(
         payloads,
         source_payloads=source,
+        transient_payloads=[],
         transient_count=1,
     )
 
@@ -51,11 +56,46 @@ def test_without_transient_payloads_restores_source_user_payload() -> None:
     result = _without_transient_payloads(
         payloads,
         source_payloads=[source_user],
+        transient_payloads=[],
         transient_count=0,
     )
 
     assert result[0] is source_user
     assert _payload_texts(result) == ["base", "reply"]
+
+
+def test_transient_strip_removes_suspend_and_preserves_new_tail_tool_call() -> None:
+    """复现 timeout transient 剥离后 assistant/assistant/tool_result 的线上事故。"""
+    source = SimpleNamespace(payloads=[
+        LLMPayload(ROLE.USER, Text("u")),
+        LLMPayload(ROLE.ASSISTANT, ToolCall(id="done", name="tool", args={})),
+        LLMPayload(ROLE.TOOL_RESULT, ToolResult(value="ok", call_id="done")),
+        LLMPayload(ROLE.ASSISTANT, Text("__SUSPEND__")),
+    ])
+    transient = LLMPayload(ROLE.USER, Text("timeout reminder"))
+    view = build_request_view(source, [transient])
+    response = SimpleNamespace(payloads=[
+        *view.payloads,
+        LLMPayload(ROLE.ASSISTANT, ToolCall(id="next", name="tool", args={})),
+    ])
+
+    strip_transient_payloads(view, response)
+
+    assert [payload.role for payload in response.payloads] == [
+        ROLE.USER,
+        ROLE.ASSISTANT,
+        ROLE.TOOL_RESULT,
+        ROLE.ASSISTANT,
+    ]
+    assert all("__SUSPEND__" not in _payload_texts([payload]) for payload in response.payloads)
+    tail_calls = [part for part in response.payloads[-1].content if isinstance(part, ToolCall)]
+    assert [call.id for call in tail_calls] == ["next"]
+
+    response.payloads.append(
+        LLMPayload(ROLE.TOOL_RESULT, ToolResult(value="ok", call_id="next"))
+    )
+    roles = [payload.role for payload in response.payloads]
+    assert roles[-3:] == [ROLE.TOOL_RESULT, ROLE.ASSISTANT, ROLE.TOOL_RESULT]
 
 
 def test_heal_orphan_tool_result_after_user() -> None:

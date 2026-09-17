@@ -58,8 +58,8 @@ def _resolve_memo_limits(plugin: BaseAction) -> tuple[int, float, float, float]:
 class NFCMemoAction(BaseAction):
     """写入或刷新一条私人备忘录。"""
 
-    action_name = "nfc_memo"
-    action_description = (
+    name = "nfc_memo"
+    description = (
         "给自己记一条带过期时间的私人备忘便签。备忘条目会自动渲染到你的"
         "提示词末尾，让你保持对它的意识，但不需要时刻提起或反复念叨——"
         "只在恰当的时机自然地用上。\n\n"
@@ -143,8 +143,8 @@ class NFCMemoAction(BaseAction):
 class NFCMemoDeleteAction(BaseAction):
     """按 id 删除一条或多条备忘录。"""
 
-    action_name = "nfc_memo_delete"
-    action_description = (
+    name = "nfc_memo_delete"
+    description = (
         "删除一条或多条已不再需要的备忘录。\n"
         "**典型场景：你看到备忘录里某条事情你刚刚已经做了/兑现了/不再相关了，"
         "就主动调用此工具删掉它，避免脑门便签和实际状态对不上。**\n"

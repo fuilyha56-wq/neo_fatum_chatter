@@ -26,14 +26,6 @@ from neo_fatum_chatter.domain.intent import KIND_TOPIC_HOOK, Intent, IntentQueue
 from neo_fatum_chatter.domain.session_state import NFCSession
 from neo_fatum_chatter.domain.world import WorldTracker
 from neo_fatum_chatter.config import NFCConfig
-from neo_fatum_chatter.context.sources.state_source import build_state_contributions
-from neo_fatum_chatter.domain.memo import (
-    MEMO_MAX_ENTRIES,
-    Memo,
-    MemoBook,
-    clamp_expire_hours,
-)
-from neo_fatum_chatter.models import NFCEventType
 
 DAY = 86400.0
 HOUR = 3600.0

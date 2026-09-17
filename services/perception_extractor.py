@@ -58,15 +58,16 @@ async def extract_reply_from_perception(
         model_task: 使用的模型任务名称
 
     Returns:
-        提取出的回复文本；提取失败或无有效内容时返回空字符串
+        提取出的回复文本；提取失败、非法 JSON 或无有效内容时返回空字符串。
+        不会把未经提取的感知/思考原文发送给用户。
     """
     if not perception_text or not perception_text.strip():
         return ""
 
     model_set = get_model_set_by_task(model_task)
     if not model_set:
-        logger.warning("[NFC] perception_extractor: 无法获取 sub actor 模型配置")
-        return perception_text
+        logger.warning("[NFC] perception_extractor: 无法获取 sub actor 模型配置，放弃发送感知原文")
+        return ""
 
     request = create_llm_request(model_set, "NFC_perception_extract")
     request.add_payload(LLMPayload(ROLE.SYSTEM, Text(_EXTRACTION_SYSTEM_PROMPT)))
@@ -79,8 +80,8 @@ async def extract_reply_from_perception(
         llm_response = await request.send()
         raw_result = (await llm_response or "").strip()
     except Exception as exc:
-        logger.warning(f"[NFC] perception_extractor: LLM 调用失败: {exc}")
-        return perception_text
+        logger.warning(f"[NFC] perception_extractor: LLM 调用失败，放弃发送感知原文: {exc}")
+        return ""
 
     if not raw_result:
         logger.debug("[NFC] perception_extractor: LLM 返回空结果")
@@ -112,7 +113,7 @@ def _parse_extraction_result(raw_result: str, fallback: str) -> str:
             return reply
         else:
             logger.debug("[NFC] perception_extractor: 响应中未找到 JSON")
-            return fallback
+            return ""
     except (json.JSONDecodeError, AttributeError, TypeError) as exc:
-        logger.debug(f"[NFC] perception_extractor: JSON 解析失败: {exc}")
-        return fallback
+        logger.debug(f"[NFC] perception_extractor: JSON 解析失败，放弃发送感知原文: {exc}")
+        return ""

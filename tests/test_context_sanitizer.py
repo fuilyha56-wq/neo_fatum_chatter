@@ -221,3 +221,128 @@ def test_timeout_entry_sanitizes_before_appending_suspend_payload():
     assert resp.payloads[0].role == ROLE.USER
     assert resp.payloads[-1].role == ROLE.ASSISTANT
     assert resp.payloads[-1].content == [Text("__SUSPEND__")]
+
+
+# ── 配对追踪清洗（bugfix: assistant 前必须是 user 或 tool_result）────────
+
+
+def _assert_validator_clean(payloads) -> None:
+    """最终链必须通过框架严格校验（发送态，不允许未闭合尾）。"""
+    LLMContextManager().validate_for_send(list(payloads))
+
+
+def test_sanitize_repairs_adjacent_assistants_with_tool_calls():
+    """相邻 assistant（前一个的 tool_result 丢失）必须修复为合法链。"""
+    context_manager = LLMContextManager()
+    resp = _FakeResponse(
+        [
+            _user("u"),
+            _assistant([ToolCall(id="c1", name="tool-x", args={})]),
+            _assistant([ToolCall(id="c2", name="tool-y", args={})]),
+            _tool_result("c2", "ok"),
+        ]
+    )
+    sanitize_payload_chain(resp, reason="test")
+    _assert_validator_clean(resp.payloads)
+    assert [p.role for p in resp.payloads] == [
+        ROLE.USER,
+        ROLE.ASSISTANT,
+        ROLE.TOOL_RESULT,
+    ]
+
+
+def test_sanitize_strips_unclosed_calls_before_next_user():
+    """assistant 的调用未拿到结果就遇到下一条 user，应摘除调用声明。"""
+    context_manager = LLMContextManager()
+    resp = _FakeResponse(
+        [
+            _user("u"),
+            _assistant([ToolCall(id="c1", name="tool-x", args={})]),
+            _user("next"),
+        ]
+    )
+    sanitize_payload_chain(resp, reason="test")
+    _assert_validator_clean(resp.payloads)
+    assert [p.role for p in resp.payloads] == [ROLE.USER, ROLE.USER]
+
+
+def test_sanitize_drops_tool_result_after_plain_assistant():
+    """纯文本 assistant 之后的 tool_result 是孤立的，必须丢弃。"""
+    context_manager = LLMContextManager()
+    resp = _FakeResponse(
+        [
+            _user("u"),
+            _assistant([Text("plain")]),
+            _tool_result("c9", "orphan"),
+            _user("next"),
+        ]
+    )
+    sanitize_payload_chain(resp, reason="test")
+    _assert_validator_clean(resp.payloads)
+    assert all(p.role != ROLE.TOOL_RESULT for p in resp.payloads)
+
+
+def test_sanitize_drops_mismatched_tool_result_and_trailing_calls():
+    """call_id 不匹配的结果被丢弃后，链尾未闭合调用也要摘除。"""
+    context_manager = LLMContextManager()
+    resp = _FakeResponse(
+        [
+            _user("u"),
+            _assistant([ToolCall(id="c1", name="tool-x", args={})]),
+            _tool_result("cX", "mismatch"),
+        ]
+    )
+    sanitize_payload_chain(resp, reason="test")
+    _assert_validator_clean(resp.payloads)
+    assert all(p.role != ROLE.TOOL_RESULT for p in resp.payloads)
+
+
+def test_sanitize_drops_duplicate_tool_result():
+    """同一 call_id 的重复结果第二次出现必须丢弃。"""
+    context_manager = LLMContextManager()
+    resp = _FakeResponse(
+        [
+            _user("u"),
+            _assistant([ToolCall(id="c1", name="tool-x", args={})]),
+            _tool_result("c1", "first"),
+            _tool_result("c1", "dup"),
+        ]
+    )
+    sanitize_payload_chain(resp, reason="test")
+    _assert_validator_clean(resp.payloads)
+    tool_results = [p for p in resp.payloads if p.role == ROLE.TOOL_RESULT]
+    assert len(tool_results) == 1
+
+
+def test_sanitize_merges_text_assistant_after_call_assistant_without_results():
+    """前一个 assistant 因丢结果被摘成纯文本后，与相邻 assistant 合并。"""
+    context_manager = LLMContextManager()
+    resp = _FakeResponse(
+        [
+            _user("u"),
+            _assistant([Text("keep"), ToolCall(id="c1", name="tool-x", args={})]),
+            _assistant([Text("trailing")]),
+        ]
+    )
+    sanitize_payload_chain(resp, reason="test")
+    _assert_validator_clean(resp.payloads)
+    assistants = [p for p in resp.payloads if p.role == ROLE.ASSISTANT]
+    assert len(assistants) == 1
+    texts = [part.text for part in assistants[0].content if isinstance(part, Text)]
+    assert texts == ["keep", "trailing"]
+
+
+def test_prepare_full_corruption_chain_becomes_validator_clean():
+    """综合损坏链（孤立 assistant + 相邻 assistant + 孤立结果）一次清洗到位。"""
+    context_manager = LLMContextManager()
+    resp = _FakeResponse(
+        [
+            _assistant([Text("leading-orphan")]),
+            _user("u"),
+            _assistant([ToolCall(id="c1", name="tool-x", args={})]),
+            _assistant([Text("crash after calls")]),
+            _tool_result("cZ", "orphan"),
+        ]
+    )
+    assert prepare_payload_chain_for_send(resp, reason="test") is True
+    _assert_validator_clean(resp.payloads)

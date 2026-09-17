@@ -89,6 +89,15 @@ max_defer_seconds / min_input_chars`。
 拟人聊天 / 人设扮演 / 剧情 RP = 同一引擎的三个点：角色深度 × 世界登记。
 剧情世界经 turn contribution（transient）渲染进 prompt，不污染持久链。
 
+现实登记簿还包含日程化的 `DailyLifeState`：五段窗口与作息锚点只产生
+`routine/inferred` 推断；`planned` 是计划；`self_state_commit` 是角色自己的
+当前披露；`observed` 只能由显式观察写入。时间经过、标题相似或模型的
+`completed` 字段不会把计划晋升为现实执行事实。`WorldTracker.reality_view()`
+提供带 source/epistemic/evidence 标签的结构化现实快照，`nfc_manage_schedule`
+统一处理 add/list/confirm/observe/cancel/expire，所有 mutation 走 session lock
+并保留稳定 ID、revision 与幂等键。跨日 rollover 清理当日临时条目，跨午夜
+活动只在仍覆盖结束窗口时延续。
+
 ## 四、信念层（`domain/beliefs.py` + `services/belief_service.py`）
 
 三层记忆：mental_log（事件日志）→ history_summary（叙事压缩）→
@@ -115,6 +124,32 @@ max_defer_seconds / min_input_chars`。
 
 配置：`[intent] enabled / fire_threshold`。
 
+每次主动判定同时维护 `ProactiveCandidate`：候选拥有稳定 `origin_id` /
+`dedupe_key`、route/source、preferred/best/expire 窗口和
+`queued/deferred/blocked/dispatching/sent/expired/cancelled` 生命周期。候选只是审计与
+去重层，不是发送保证；勿扰、冷却、暂停等 gate 会记录阻塞原因，用户新消息
+会取消冲突的 continuation，实际触发后才标记 `sent`，并随 session JSON 恢复。
+
+### 主动回合的工具能力
+
+主动回合与普通回合同用一个 `usable_map`（execute 生命周期内 `inject_usables`
+一次性注册，含全部第三方工具如 nai 发图），触发占位消息会作为 `trigger_msg`
+传给工具执行器——**执行链路上主动发图从来不是问题，限制只曾在提示词层**。
+当前版本起提示词不再把工具集收窄为 nfc_reply/do_nothing：
+
+- 每轮 user_text 末尾"重申"、主动决策指令（`NFC_PROACTIVE_DECISION_TOOL_CALLING`）、
+  感知→决策跟进提示（`NFC_PERCEIVE_FOLLOWUP_PROMPT_TOOL_CALLING`）均改为
+  "除基础动作外可组合调用其他已注册工具，按调用顺序依次执行"；
+- 模型一次响应发多个工具调用时，解析器按序执行（第三方批量 flush、reply 前
+  先 flush 已积累的第三方调用、查询类工具回传结果后续轮再决策）。
+
+主动思考提示词模板可通过 `[prompt] proactive_prompt_override` 自定义
+（占位：`{current_time}` `{silence_duration}` `{recent_activity}`
+`{proactive_decision_instruction}`；校验 XML 配对 + 占位白名单，违规回退默认）。
+`build_proactive_context` 每次触发时重新解析模板，配置热更新后下一次主动发起
+立即生效；`register_nfc_prompts` 同步改为覆盖式注册（`register_template`），
+修复了 system_prompt_override 热重载不生效的存量缺陷。
+
 ## 六、备忘录（`domain/memo.py` + `actions/memo.py`）
 
 第四层记忆：**LLM 显式标记的中短期便签**。与 mental_log（自动事件流）、
@@ -138,6 +173,9 @@ min_expire_hours / max_expire_hours`。
 ## 七、角色卡三层（`domain/character_card.py` + `[character]` 配置）
 
 - **红线**（`redlines`）：无论什么情况都不会做的事——OOC 最后闸门；
+  非空时只读追加到 core.toml 的 `safety_guidelines` /
+  `negative_behaviors` 末尾随系统提示词生效（热重载同步），
+  不再单独渲染；
 - **隐藏事实**（`hidden_facts`：`{fact, condition}`）：**平时不进 prompt**，
   S1 判定 `reveal_ids` 满足揭示条件后才注入——角色因此可以欲言又止、有秘密可揭；
 - **剧情覆层**（overlay）：入戏时套上的临时戏服，出戏摘除——

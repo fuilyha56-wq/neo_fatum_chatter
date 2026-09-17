@@ -13,6 +13,7 @@ from src.kernel.llm import LLMPayload, ROLE
 from src.kernel.llm.request import LLMRequest
 
 from ..protocol.reasoning_transport import attach_nfc_model_clients
+from ..services.context_sanitizer import repair_post_send_chain
 
 
 @dataclass(slots=True)
@@ -23,6 +24,7 @@ class RequestView:
     payloads: list[LLMPayload] = field(default_factory=list)
     source_payloads: list[LLMPayload] = field(default_factory=list)
     transient_count: int = 0
+    transient_payloads: list[LLMPayload] = field(default_factory=list)
 
     @property
     def model_set(self) -> Any:
@@ -63,8 +65,10 @@ def strip_transient_payloads(view: RequestView, response: Any) -> Any:
         response.payloads = _without_transient_payloads(
             payloads,
             source_payloads=view.source_payloads,
+            transient_payloads=view.transient_payloads,
             transient_count=view.transient_count,
         )
+        repair_post_send_chain(response, reason="transient-strip")
     return response
 
 
@@ -72,23 +76,38 @@ def _without_transient_payloads(
     payloads: list[LLMPayload],
     *,
     source_payloads: list[LLMPayload],
+    transient_payloads: list[LLMPayload],
     transient_count: int,
 ) -> list[LLMPayload]:
-    """移除 transient payload，并恢复 source 中原始 USER payload。"""
-    base_count = len(source_payloads)
-    if transient_count > 0 and len(payloads) >= base_count + transient_count:
-        persistent_payloads = (
-            list(payloads[:base_count])
-            + list(payloads[base_count + transient_count:])
-        )
+    """按对象身份移除 transient；下标切片仅作为旧 provider 兼容回退。"""
+    transient_ids = {id(payload) for payload in transient_payloads}
+    identity_filtered = [payload for payload in payloads if id(payload) not in transient_ids]
+    if len(identity_filtered) != len(payloads):
+        persistent_payloads = identity_filtered
     else:
-        persistent_payloads = list(payloads)
+        base_count = len(source_payloads)
+        if transient_count > 0 and len(payloads) >= base_count + transient_count:
+            persistent_payloads = (
+                list(payloads[:base_count])
+                + list(payloads[base_count + transient_count:])
+            )
+        else:
+            persistent_payloads = list(payloads)
 
-    for index, source_payload in enumerate(source_payloads):
-        if index >= len(persistent_payloads):
-            break
-        if source_payload.role == ROLE.USER:
-            persistent_payloads[index] = source_payload
+    # reminder hook 可能重建 USER 对象，因此 USER 允许“同位置同角色”；其余角色
+    # 必须保持对象身份作为锚点。只要前缀发生裁剪/位移，就不按下标恢复旧 USER。
+    prefix_aligned = len(persistent_payloads) >= len(source_payloads) and all(
+        persistent_payloads[index] is source_payload
+        or (
+            source_payload.role == ROLE.USER
+            and persistent_payloads[index].role == ROLE.USER
+        )
+        for index, source_payload in enumerate(source_payloads)
+    )
+    if prefix_aligned:
+        for index, source_payload in enumerate(source_payloads):
+            if source_payload.role == ROLE.USER:
+                persistent_payloads[index] = source_payload
     return persistent_payloads
 
 
@@ -106,4 +125,5 @@ def build_request_view(
         payloads=payloads,
         source_payloads=source_payloads,
         transient_count=len(transients),
+        transient_payloads=transients,
     )

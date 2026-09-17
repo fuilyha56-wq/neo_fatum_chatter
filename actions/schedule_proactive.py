@@ -32,8 +32,8 @@ _BASE_DESCRIPTION = (
 class ScheduleProactiveAction(BaseAction):
     """预约下一次主动思考时间。"""
 
-    action_name: str = "schedule_proactive"
-    action_description: str = _BASE_DESCRIPTION
+    name: str = "schedule_proactive"
+    description: str = _BASE_DESCRIPTION
     chatter_allow: list[str] = ["neo_fatum_chatter"]
     associated_types = ["text"]
 

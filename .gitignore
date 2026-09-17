@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
 
@@ -61,3 +62,6 @@ temp_*.txt
 # Runtime data / media cache / logs (added by DSH 2026-08-19)
 data/
 media_cache/
+
+# Mimosa security scan state
+.mimosa/

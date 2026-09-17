@@ -216,8 +216,60 @@ def heal_orphan_tool_results(response: Any, *, where: str = "发送前") -> bool
     return changed
 
 
+def _last_convo_role(cleaned: list[LLMPayload]) -> ROLE | None:
+    """返回 cleaned 中最后一个非 pinned 角色（与框架校验器的 convo 视角一致）。"""
+    for item in reversed(cleaned):
+        role = getattr(item, "role", None)
+        if role in _PINNED_ROLES:
+            continue
+        return role
+    return None
+
+
+def _drop_uncalled_tool_calls(
+    cleaned: list[LLMPayload],
+    assistant_payload: LLMPayload,
+    assistant_index: int,
+    remove_ids: set[str],
+) -> None:
+    """从 assistant payload 摘除无法获得结果的 ToolCall 声明。
+
+    调用若已彻底无法配对结果（结果丢失 / 被后续角色截断），继续保留声明
+    会让框架校验器报 "tool_result 未覆盖全部 tool_call"；若摘除后 payload
+    变空，则连同 payload 一并移除。
+    """
+    content = getattr(assistant_payload, "content", None)
+    if not isinstance(content, list):
+        return
+    kept = [
+        part
+        for part in content
+        if not (
+            isinstance(part, ToolCall)
+            and part.id is not None
+            and str(part.id) in remove_ids
+        )
+    ]
+    if len(kept) == len(content):
+        return
+    assistant_payload.content = kept
+    if not kept and 0 <= assistant_index < len(cleaned):
+        if cleaned[assistant_index] is assistant_payload:
+            del cleaned[assistant_index]
+
+
 def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
-    """清洗 response.payloads 中会触发框架严格校验的相邻角色链。"""
+    """把 response.payloads 清洗成框架严格校验器（validate_payload_sequence）接受的链路。
+
+    与校验器对偶地维护 pending call_id 配对状态：
+    - assistant 声明的 ToolCall 必须由紧随的 tool_result 全额覆盖；
+    - tool_result 只有命中 pending call_id 才保留；
+    - assistant 前必须是 user 或 tool_result（否则合并/桥接/丢弃）；
+    - 链尾残留未闭合调用时摘除声明。
+
+    旧实现不追踪 call_id 配对，会把孤立 tool_result 误判为合法、
+    在带 tool_call 的 assistant 后插入 user 桥接反而制造未覆盖调用。
+    """
     payloads = getattr(response, "payloads", None)
     if not isinstance(payloads, list) or not payloads:
         return False
@@ -225,7 +277,22 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
     changed = False
     cleaned: list[LLMPayload] = []
     last_convo_role: ROLE | None = None
-    seen_user = False
+
+    pending_call_ids: set[str] = set()
+    pending_index: int = -1
+
+    def drop_pending_calls() -> None:
+        """摘除当前未闭合的 ToolCall 声明（必要时移除空 assistant）。"""
+        nonlocal changed, pending_call_ids, pending_index
+        if pending_call_ids and pending_index >= 0:
+            before = len(cleaned)
+            _drop_uncalled_tool_calls(
+                cleaned, cleaned[pending_index], pending_index, pending_call_ids
+            )
+            if len(cleaned) != before:
+                changed = True
+        pending_call_ids = set()
+        pending_index = -1
 
     for payload in payloads:
         role = getattr(payload, "role", None)
@@ -234,16 +301,22 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
             continue
 
         if role == ROLE.USER:
+            if pending_call_ids:
+                drop_pending_calls()
             cleaned.append(payload)
             last_convo_role = ROLE.USER
-            seen_user = True
             continue
 
         if role == ROLE.ASSISTANT:
-            if not seen_user and last_convo_role is None:
+            if last_convo_role is None:
                 changed = True
                 logger.debug(f"[NFC] {reason}: 移除首个 user 前孤立 assistant")
                 continue
+
+            if pending_call_ids:
+                # 上一 assistant 的调用已被后续角色截断，无法再收到结果。
+                drop_pending_calls()
+                last_convo_role = _last_convo_role(cleaned)
 
             if last_convo_role == ROLE.ASSISTANT:
                 previous = next(
@@ -256,7 +329,6 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
                 )
                 if (
                     isinstance(previous, LLMPayload)
-                    and previous.role == ROLE.ASSISTANT
                     and not _has_tool_call(previous)
                     and not _has_tool_call(payload)
                 ):
@@ -281,26 +353,108 @@ def sanitize_payload_chain(response: Any, *, reason: str = "发送前") -> bool:
 
             cleaned.append(payload)
             last_convo_role = ROLE.ASSISTANT
+            calls = _tool_calls(payload)
+            call_ids = {
+                str(call.id) for call in calls if getattr(call, "id", None) is not None
+            }
+            if call_ids:
+                pending_call_ids = call_ids
+                pending_index = len(cleaned) - 1
             continue
 
         if role == ROLE.TOOL_RESULT:
-            valid_results = _valid_tool_results(payload)
-            if last_convo_role not in {ROLE.ASSISTANT, ROLE.TOOL_RESULT} or not valid_results:
-                changed = True
-                logger.debug(f"[NFC] {reason}: 丢弃孤立、空或缺少 call_id 的 tool_result payload")
-                continue
-            if len(valid_results) != len(getattr(payload, "content", [])):
-                payload.content = valid_results
-                changed = True
-                logger.debug(f"[NFC] {reason}: 移除缺少 call_id 的 tool_result 内容")
-            cleaned.append(payload)
-            last_convo_role = ROLE.TOOL_RESULT
+            if pending_call_ids:
+                matched = [
+                    result
+                    for result in _valid_tool_results(payload)
+                    if str(result.call_id) in pending_call_ids
+                ]
+                if matched:
+                    if len(matched) != len(getattr(payload, "content", [])):
+                        payload.content = matched
+                        changed = True
+                    cleaned.append(payload)
+                    last_convo_role = ROLE.TOOL_RESULT
+                    for result in matched:
+                        pending_call_ids.discard(str(result.call_id))
+                    if not pending_call_ids:
+                        pending_index = -1
+                    continue
+
+            changed = True
+            logger.debug(f"[NFC] {reason}: 丢弃孤立或不匹配的 tool_result payload")
             continue
 
         cleaned.append(payload)
 
+    if pending_call_ids:
+        drop_pending_calls()
+        changed = True
+
     if changed:
         response.payloads = cleaned
+    return changed
+
+
+def _is_suspend_payload(payload: Any) -> bool:
+    return (
+        getattr(payload, "role", None) == ROLE.ASSISTANT
+        and not _has_tool_call(payload)
+        and _payload_text(payload) == _SUSPEND_TEXT
+    )
+
+
+def repair_post_send_chain(response: Any, *, reason: str = "发送后") -> bool:
+    """修复模型返回后的边界，同时保留尾部尚待执行的 ToolCall。
+
+    ``__SUSPEND__`` 只用于让等待前的 tool_result 具备合法尾部；一旦新响应
+    已经返回，它必须从持久链移除。否则 timeout transient USER 被剥离后会形成
+    ``assistant(__SUSPEND__), assistant(tool_call)``，工具结果回写时整链失效。
+    """
+    payloads = getattr(response, "payloads", None)
+    if not isinstance(payloads, list) or not payloads:
+        return False
+
+    before_roles = [str(getattr(item, "role", "?")) for item in payloads]
+    cleaned = [payload for payload in payloads if not _is_suspend_payload(payload)]
+    changed = len(cleaned) != len(payloads)
+    if changed:
+        response.payloads = cleaned
+
+    healed = heal_orphan_tool_results(response, where=reason)
+    changed = changed or healed
+    payloads = list(getattr(response, "payloads", []) or [])
+
+    repaired: list[LLMPayload] = []
+    for payload in payloads:
+        role = getattr(payload, "role", None)
+        if role != ROLE.ASSISTANT:
+            repaired.append(payload)
+            continue
+        previous = next(
+            (
+                item for item in reversed(repaired)
+                if getattr(item, "role", None) not in _PINNED_ROLES
+            ),
+            None,
+        )
+        if getattr(previous, "role", None) != ROLE.ASSISTANT:
+            repaired.append(payload)
+            continue
+        if not _has_tool_call(previous) and not _has_tool_call(payload):
+            _merge_payload_content(previous, payload)
+            changed = True
+            continue
+        repaired.append(LLMPayload(ROLE.USER, Text("请继续根据上文完成本轮决策。")))
+        repaired.append(payload)
+        changed = True
+
+    if changed:
+        response.payloads = repaired
+        after_roles = [str(getattr(item, "role", "?")) for item in repaired]
+        logger.warning(
+            f"[NFC] {reason}: 已修复发送后链路 roles={before_roles} -> {after_roles}"
+        )
     return changed
 
 

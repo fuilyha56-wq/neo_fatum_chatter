@@ -19,6 +19,7 @@ from ..services.context_sanitizer import (
     prepare_payload_chain_for_send,
 )
 from .message_buffer import dedupe_messages_by_id
+from .unread_policy import format_unread_messages, prefer_real_unreads
 
 if TYPE_CHECKING:
     from ..config import NFCConfig
@@ -88,6 +89,17 @@ async def prepare_turn_input(
     formatted_text, unread_msgs = await chatter.fetch_unreads(
         time_format="%Y-%m-%d %H:%M:%S"
     )
+    # 主动触发是内部占位消息；与真实消息同时到达时必须丢弃它，
+    # 否则占位符会被当作用户正文，且会消费掉本轮主动上下文。
+    unread_msgs = await prefer_real_unreads(chatter, unread_msgs)
+    if unread_msgs:
+        formatted_text = format_unread_messages(
+            chatter,
+            unread_msgs,
+            time_format="%Y-%m-%d %H:%M:%S",
+        )
+    else:
+        formatted_text = ""
     extra_payload: LLMPayload | None = None
     is_final_timeout = False
     is_timeout_turn = False

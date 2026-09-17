@@ -17,8 +17,8 @@ logger = get_logger("NFC_do_nothing")
 class DoNothingAction(BaseAction):
     """不回复，不做任何操作。"""
 
-    action_name: str = "do_nothing"
-    action_description: str = (
+    name: str = "do_nothing"
+    description: str = (
         "决定不做任何回复。当对方的消息不需要回应、纯表情、或者你选择已读不回时使用。"
     )
     chatter_allow: list[str] = ["neo_fatum_chatter"]

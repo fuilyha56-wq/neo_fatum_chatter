@@ -16,8 +16,8 @@ logger = get_logger("NFC_record_habit")
 class RecordHabitAction(BaseAction):
     """记录一条用户习惯观察。"""
 
-    action_name = "nfc_record_habit"
-    action_description = (
+    name = "nfc_record_habit"
+    description = (
         "记录你对对方习惯的观察，比如作息时间、出没规律、行为偏好等。"
         "这些记录会持久保存，以后可以通过 nfc_query_habits 查询。"
         "比如：「通常23点睡觉」「工作日早上9点上班」「周末下午喜欢打游戏」。"

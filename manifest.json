@@ -61,6 +61,16 @@
         },
         {
             "component_type": "action",
+            "component_name": "nfc_update_world",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
+            "component_name": "nfc_manage_schedule",
+            "dependencies": []
+        },
+        {
+            "component_type": "action",
             "component_name": "nfc_remove_habit",
             "dependencies": []
         },

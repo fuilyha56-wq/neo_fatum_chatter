@@ -13,8 +13,8 @@ logger = get_logger("NFC_update_habit")
 class UpdateHabitAction(BaseAction):
     """按查询结果中的 ID 纠正一条用户习惯观察。"""
 
-    action_name = "nfc_update_habit"
-    action_description = (
+    name = "nfc_update_habit"
+    description = (
         "纠正先前记录但已过时或有误的用户习惯。必须先通过 "
         "nfc_query_habits 获取 habit_id；至少提供新的 habit_text 或 category。"
     )

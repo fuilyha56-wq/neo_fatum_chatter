@@ -120,7 +120,7 @@ flowchart TD
 
 **① 消息积累** —— 收到新消息后不立即回复，先等一个积累窗口（默认 1.5 秒，上限 5 秒）把连发消息合并成一次 LLM 调用，避免逐条触发。
 
-**② 等待与超时** —— 发送或沉默后进入等待。到 `max_wait_seconds` 未回复则重新注入上下文，让模型决定追问、继续等或放弃；连续超时达上限后停止等待。等待期间收到新消息默认**抑制到超时点统一处理**（`suppress_early_wake`），整个抑制期只构建一次上下文。
+**② 等待与超时** —— 发送或沉默后进入等待。到 `max_wait_seconds` 未回复则重新注入上下文，让模型决定追问、继续等或放弃；连续超时达上限后停止等待。等待期间收到新消息会**立即提前唤醒**；若开启 `suppress_early_wake`，则改为抑制到超时点统一处理，整个抑制期只构建一次上下文。
 
 **③ 生成打断** —— LLM 生成期间每 `interrupt_poll_seconds`（默认 0.5 秒）轮询一次，发现新消息就取消当前请求，把打断消息写入心理活动流后重新决策，避免"堵着嘴回复"。
 
@@ -128,6 +128,7 @@ flowchart TD
 
 - **预约为主**：模型可在任意时刻调用 `schedule_proactive` 预约 30 分钟~24 小时后的主动联系，并写下理由——理由会保存，触发时注入提示词，让"未来的自己"能自然接上。
 - **沉默兜底**：无预约且沉默超过 `silence_threshold` 时，按 `trigger_probability` 概率兜底触发。
+- **工具不设限**：主动发起与普通回复使用同一套已注册工具——主动时也能发图（如 nai）、发表情包，可在同一响应里组合多个工具按序执行；主动思考提示词可通过 `[prompt] proactive_prompt_override` 自定义。
 - **会话级开关**：`nfc_set_proactive_enabled` 可暂停/恢复某段私聊的主动联系（带原因）；`nfc_query_proactive_status` 可查询预约、冷却或暂停状态。
 - **缓存友好**：主动思考注入的富上下文（沉默时长 / 近期活动 / 预约理由）只作为临时 turn contribution，不进入持久历史，保护 prompt prefix cache。
 - **勿扰时段**：默认 23:00~07:00 静默（预约不受勿扰限制）。
@@ -193,7 +194,7 @@ mpdt market install neo_fatum_chatter
 | `min_seconds` | `10.0` | 最小等待秒数 |
 | `max_seconds` | `600.0` | 最大等待秒数 |
 | `max_consecutive_timeouts` | `3` | 连续超时上限，达到后不再等待 |
-| `suppress_early_wake` | `true` | 等待期间新消息是否抑制到超时点统一处理 |
+| `suppress_early_wake` | `false` | 等待期间新消息是否抑制到超时点统一处理 |
 
 ### `[proactive]` 主动联系
 
@@ -228,6 +229,7 @@ mpdt market install neo_fatum_chatter
 | `request_snapshot_enabled` | `true` | 保存每次实际发送的完整请求体，重启后首个请求自动恢复 |
 | `summary_enabled` | `true` | 是否启用近期记忆摘要 |
 | `system_prompt_override` | 标准模板 | 系统提示词自定义（含 XML 配对 / 占位符 / 6 大核心标签校验，违规自动回退） |
+| `proactive_prompt_override` | 标准模板 | 主动思考提示词自定义（沉默/预约触发时的思考上下文；占位：`{current_time}` `{silence_duration}` `{recent_activity}` `{proactive_decision_instruction}`；含 XML 配对 / 占位符校验，违规自动回退） |
 | `max_log_entries` | `50` | 心理活动流最大条目数 |
 | `max_context_payloads` | `20` | 上下文持久化链最大条目数 |
 | `max_initial_chain_payloads` | `12` | execute 启动时最多恢复进 LLM 的 chain 条数 |
@@ -250,6 +252,17 @@ mpdt market install neo_fatum_chatter
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `injection_point` | `default_chatter_user_prompt` | `on_prompt_build` 事件注入点名；回退私有注入点用 `NFC_user_prompt` |
+
+### `[world]` 现实世界状态
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 是否渲染角色自己的日常世界状态 |
+| `wake_time` / `sleep_time` | `07:30` / `22:30` | 作息锚点；用于睡眠和窗口推断 |
+| `location` | `""` | 角色默认位置；不会伪造对方位置 |
+| `routine` | `{}` | 五段窗口到活动模板，可用中文别名 |
+
+日常状态区分 `planned`（计划）、`self_state_commit`（角色自述）、`observed`（明确观察）和 `routine/inferred`（作息推断）。计划或内部模拟不会因为时间经过而自动变成现实执行事实。
 
 ### `[debug]` 调试
 
@@ -280,6 +293,13 @@ NFC 通过原生 tool calling 向 LLM 暴露以下动作（仅 NFC 调度时可�
 | `nfc_update_habit` | 按 `habit_id` 纠正过时/有误的习惯 |
 | `nfc_remove_habit` | 按 `habit_id` 删除被证伪/过期的习惯 |
 
+### 角色自己的现实日程
+
+| 工具 | 说明 |
+|---|---|
+| `nfc_update_world` | 更新/清除角色自己的当前活动自述（`self_state_commit`），可带结束时间和位置 |
+| `nfc_manage_schedule` | 管理角色自己的 `planned`/`observed` 日程：`add/list/confirm/observe/cancel/expire`；计划不会自动变成事实 |
+
 ### 主动联系控制
 
 | 工具 | 说明 |
@@ -300,7 +320,7 @@ NFC 通过原生 tool calling 向 LLM 暴露以下动作（仅 NFC 调度时可�
 
 ### 外部注入器
 
-监听 `on_prompt_build`，比对 `payload.prompt_name`（默认 `default_chatter_user_prompt`），返回 `ContextContribution` 列表：
+监听 `on_prompt_build`，比对 `params["name"]`（默认 `default_chatter_user_prompt`），从 `params["values"]` 读取上下文，并向 `params["context_contributions"]` 追加 `ContextContribution`：
 
 - `scope = "session"`：按哈希缓存
 - `scope = "turn"`：每轮独立，自动去重
@@ -353,7 +373,7 @@ pytest tests/ -c pyproject.toml
 设置 `[general].enabled = false` 并重载配置，NFC 会注销已注册的 Chatter 并重启受影响的流，让 `ChatterManager` 重新选择。
 
 **Q：为什么我发了多条消息它只回一次？**
-消息积累窗口（默认 1.5 秒）把连发消息合并成一次 LLM 调用，这是刻意设计；等待期间的新消息还会被抑制到超时点统一处理（可关闭 `suppress_early_wake`）。
+消息积累窗口（默认 1.5 秒）把连发消息合并成一次 LLM 调用，这是刻意设计；等待期间的新消息会立即提前唤醒，若希望抑制到超时点统一处理可开启 `suppress_early_wake`。
 
 **Q：流式打字机为什么没生效？**
 `streaming_enabled` 需配合平台适配器的消息编辑能力（当前针对 QQBot C2C）；非 qqbot 或 Service 启动失败时自动降级为普通分段发送。

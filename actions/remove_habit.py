@@ -13,8 +13,8 @@ logger = get_logger("NFC_remove_habit")
 class RemoveHabitAction(BaseAction):
     """按查询结果中的 ID 删除一条用户习惯观察。"""
 
-    action_name = "nfc_remove_habit"
-    action_description = (
+    name = "nfc_remove_habit"
+    description = (
         "删除已被证伪、过期或不应继续保留的用户习惯。必须先通过 "
         "nfc_query_habits 获取 habit_id。"
     )

@@ -68,6 +68,8 @@ class SceneState:
     social_channel: str = ""
     device_assumption_allowed: bool = False
     evidence: list[SceneEvidence] = field(default_factory=list)
+    revision: int = 0
+    updated_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为字典。"""
@@ -77,11 +79,15 @@ class SceneState:
             "social_channel": self.social_channel,
             "device_assumption_allowed": self.device_assumption_allowed,
             "evidence": [item.to_dict() for item in self.evidence],
+            "revision": self.revision,
+            "updated_at": self.updated_at,
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> SceneState:
+    def from_dict(cls, data: dict[str, Any] | None) -> SceneState:
         """从字典反序列化。"""
+        if not isinstance(data, dict):
+            return cls()
         certainty = str(data.get("certainty", "unknown") or "unknown")
         if certainty not in {"unknown", "weak", "confirmed"}:
             certainty = "unknown"
@@ -99,4 +105,24 @@ class SceneState:
             social_channel=str(data.get("social_channel", "") or ""),
             device_assumption_allowed=bool(data.get("device_assumption_allowed", False)),
             evidence=evidence_items,
+            revision=_safe_int(data.get("revision"), 0),
+            updated_at=_safe_float(data.get("updated_at"), 0.0),
         )
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        if isinstance(value, bool):
+            return default
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        if isinstance(value, bool):
+            return default
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default

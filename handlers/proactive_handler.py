@@ -32,8 +32,8 @@ class ProactiveHandler(BaseEventHandler):
     向目标流注入一条系统触发消息并唤醒流循环。
     """
 
-    handler_name: str = "nfc_proactive_handler"
-    handler_description: str = "响应主动发起事件，唤醒目标聊天流"
+    name: str = "nfc_proactive_handler"
+    description: str = "响应主动发起事件，唤醒目标聊天流"
     weight: int = 0
     intercept_message: bool = False
     init_subscribe: list[EventType | str] = [_PROACTIVE_EVENT]
@@ -61,16 +61,26 @@ class ProactiveHandler(BaseEventHandler):
             return EventDecision.PASS, params
 
         scheduled_reason: str = params.get("scheduled_reason", "")
+        candidate_key: str = str(params.get("candidate_key", "") or "")
         try:
-            success = await self._wake_stream(stream_id, scheduled_reason)
+            success = await self._wake_stream(
+                stream_id, scheduled_reason, candidate_key=candidate_key
+            )
             if success:
                 logger.info(f"主动发起: 流 {stream_id[:8]} 已唤醒")
-            return EventDecision.SUCCESS, params
+                return EventDecision.SUCCESS, params
+            return EventDecision.PASS, params
         except Exception as e:
             logger.error(f"主动发起处理异常: {e}", exc_info=True)
             return EventDecision.PASS, params
 
-    async def _wake_stream(self, stream_id: str, scheduled_reason: str = "") -> bool:
+    async def _wake_stream(
+        self,
+        stream_id: str,
+        scheduled_reason: str = "",
+        *,
+        candidate_key: str = "",
+    ) -> bool:
         """向目标流注入触发消息并唤醒流循环。
 
         Args:
@@ -81,6 +91,34 @@ class ProactiveHandler(BaseEventHandler):
             bool: 是否成功唤醒
         """
         from src.app.plugin_system.api.stream_api import get_stream, get_or_create_stream
+
+        if candidate_key:
+            try:
+                from ..plugin import NFCPlugin
+                if isinstance(self.plugin, NFCPlugin):
+                    store = self.plugin._session_store  # type: ignore[attr-defined]
+                    async with store.lock(stream_id):
+                        session = await store.get(stream_id)
+                        if session is None:
+                            return False
+                        candidate = next(
+                            (item for item in session.proactive_candidates
+                             if item.dedupe_key == candidate_key),
+                            None,
+                        )
+                        if candidate is None or candidate.status != "dispatching":
+                            return False
+                        if (
+                            candidate.route in {"continuation", "silence"}
+                            and session.last_user_message_at is not None
+                            and session.last_user_message_at > candidate.created_at
+                        ):
+                            candidate.mark("cancelled", reason="user_message_before_wake")
+                            await store.save(session)
+                            return False
+            except Exception as exc:
+                logger.debug(f"主动候选二次校验失败: {exc}")
+                return False
 
         chat_stream = await get_stream(stream_id)
         is_cold_start = chat_stream is None
@@ -158,21 +196,6 @@ class ProactiveHandler(BaseEventHandler):
         except Exception as e:
             logger.debug(f"构建主动发起上下文失败，使用默认消息: {e}")
 
-        # 把富上下文存到 session 临时字段，由 plan_user_turn 作为 turn contribution 注入。
-        # 触发消息 content 用稳定占位符，避免每次主动思考的 user_text 都不同而破坏
-        # LLM prompt prefix cache。
-        try:
-            from ..plugin import NFCPlugin
-            if isinstance(self.plugin, NFCPlugin):
-                store = self.plugin._session_store  # type: ignore[attr-defined]
-                async with store.lock(stream_id):
-                    session = await store.get(stream_id)
-                    if session is not None:
-                        session.pending_proactive_context = proactive_content
-                        await store.save(session)
-        except Exception as e:
-            logger.warning(f"写入 pending_proactive_context 失败: {e}")
-
         # 触发消息 content 使用稳定占位符；富上下文走 contribution 注入路径
         trigger_message = self._build_proactive_message(
             stream_id,
@@ -180,7 +203,52 @@ class ProactiveHandler(BaseEventHandler):
             target_user_id,
             "[proactive_trigger] 主动思考触发，请发起对话",
         )
-        context.add_unread_message(trigger_message)
+
+        # 在同一把 session 锁内校验并写入 unread 队列，覆盖“校验后用户刚发消息”
+        # 的竞态。用户消息也使用这把锁，因此二者不会交错提交。
+        if candidate_key:
+            try:
+                from ..plugin import NFCPlugin
+                if isinstance(self.plugin, NFCPlugin):
+                    store = self.plugin._session_store  # type: ignore[attr-defined]
+                    async with store.lock(stream_id):
+                        session = await store.get(stream_id)
+                        candidate = next(
+                            (item for item in (session.proactive_candidates if session else [])
+                             if item.dedupe_key == candidate_key),
+                            None,
+                        )
+                        if session is None or candidate is None or candidate.status != "dispatching":
+                            return False
+                        if (
+                            candidate.route in {"continuation", "silence"}
+                            and session.last_user_message_at is not None
+                            and session.last_user_message_at > candidate.created_at
+                        ):
+                            candidate.mark("cancelled", reason="user_message_before_enqueue")
+                            await store.save(session)
+                            return False
+                        session.pending_proactive_context = proactive_content
+                        context.add_unread_message(trigger_message)
+                        await store.save(session)
+            except Exception as exc:
+                logger.debug(f"主动候选写入前校验失败: {exc}")
+                return False
+        else:
+            try:
+                from ..plugin import NFCPlugin
+                if isinstance(self.plugin, NFCPlugin):
+                    store = self.plugin._session_store  # type: ignore[attr-defined]
+                    async with store.lock(stream_id):
+                        session = await store.get(stream_id)
+                        if session is not None:
+                            session.pending_proactive_context = proactive_content
+                            context.add_unread_message(trigger_message)
+                            await store.save(session)
+                else:
+                    context.add_unread_message(trigger_message)
+            except Exception:
+                context.add_unread_message(trigger_message)
         logger.debug(f"已注入主动发起触发消息到流 {stream_id[:8]}")
 
         if is_cold_start:
@@ -194,6 +262,10 @@ class ProactiveHandler(BaseEventHandler):
                 logger.debug(f"已为冷启动流 {stream_id[:8]} 启动流循环")
             except Exception as e:
                 logger.warning(f"启动流循环失败: {e}")
+                await self._rollback_trigger_enqueue(
+                    stream_id, context, trigger_message, proactive_content
+                )
+                return False
         else:
             # 热流：清除等待状态，让下一次 tick 立即唤醒
             from .stream_wakeup_adapter import wake_hot_stream
@@ -201,6 +273,33 @@ class ProactiveHandler(BaseEventHandler):
             wake_hot_stream(stream_id)
 
         return True
+
+    async def _rollback_trigger_enqueue(
+        self,
+        stream_id: str,
+        context: Any,
+        trigger_message: Any,
+        proactive_content: str,
+    ) -> None:
+        """唤醒失败时移除本次临时消息和 pending context，允许重试。"""
+        try:
+            context.unread_messages = [
+                message
+                for message in context.unread_messages
+                if message is not trigger_message
+                and getattr(message, "message_id", "")
+                != getattr(trigger_message, "message_id", "")
+            ]
+            from ..plugin import NFCPlugin
+            if isinstance(self.plugin, NFCPlugin):
+                store = self.plugin._session_store  # type: ignore[attr-defined]
+                async with store.lock(stream_id):
+                    session = await store.get(stream_id)
+                    if session is not None and session.pending_proactive_context == proactive_content:
+                        session.pending_proactive_context = ""
+                        await store.save(session)
+        except Exception as exc:
+            logger.debug(f"主动触发回滚清理失败: {exc}")
 
     @staticmethod
     def _build_proactive_message(

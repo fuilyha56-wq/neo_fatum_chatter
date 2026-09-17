@@ -14,8 +14,8 @@ logger = get_logger("NFC_proactive_control")
 class SetProactiveEnabledAction(BaseAction):
     """启用或暂停当前私聊的主动联系。"""
 
-    action_name = "nfc_set_proactive_enabled"
-    action_description = (
+    name = "nfc_set_proactive_enabled"
+    description = (
         "启用或暂停当前私聊的主动联系。暂停后不会因预约或沉默自动联系，"
         "恢复后会继续使用原有预约和频率限制。"
     )
@@ -46,8 +46,8 @@ class SetProactiveEnabledAction(BaseAction):
 class QueryProactiveStatusAction(BaseAction):
     """查询当前私聊的主动联系状态和冷却原因。"""
 
-    action_name = "nfc_query_proactive_status"
-    action_description = "查询当前私聊是否允许主动联系，以及预约、冷却或暂停原因。"
+    name = "nfc_query_proactive_status"
+    description = "查询当前私聊是否允许主动联系，以及预约、冷却或暂停原因。"
     display_name = "查询主动联系状态"
     chatter_allow = ["neo_fatum_chatter"]
     associated_types = ["text"]
@@ -89,7 +89,21 @@ class QueryProactiveStatusAction(BaseAction):
             if remaining > 0:
                 return True, f"当前处于主动联系冷却期，约 {remaining / 60:.0f} 分钟后可再次触发"
 
-        return True, "当前允许主动联系，尚无预约或冷却限制"
+        pending_candidates = [
+            candidate
+            for candidate in session.proactive_candidates
+            if not candidate.is_terminal
+        ]
+        if pending_candidates:
+            latest = max(pending_candidates, key=lambda item: item.updated_at)
+            gate_reason = latest.block_reason or latest.defer_reason
+            detail = f"，当前 gate：{gate_reason}" if gate_reason else ""
+            return True, (
+                f"当前有 {len(pending_candidates)} 个主动候选，"
+                f"最近来源：{latest.source}/{latest.route}{detail}"
+            )
+
+        return True, "当前允许主动联系，尚无预约、候选或冷却限制"
 
 
 __all__ = ["QueryProactiveStatusAction", "SetProactiveEnabledAction"]

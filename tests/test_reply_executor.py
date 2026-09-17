@@ -36,8 +36,8 @@ def test_coerce_invalid_json_kept_as_string():
     assert coerce_content_segments('[broken') == ['[broken']
 
 
-def test_coerce_list_passes_through_with_strip():
-    assert coerce_content_segments(["a", "  b ", "", None]) == ["a", "b", "None"]
+def test_coerce_list_drops_empty_non_text_items():
+    assert coerce_content_segments(["a", "  b ", "", None, {}]) == ["a", "b"]
 
 
 def test_sanitize_strips_thinking_block():

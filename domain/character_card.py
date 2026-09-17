@@ -5,7 +5,9 @@
     - 隐藏层：角色的秘密、过去、真实想法——**平时不进 prompt**，
       满足揭示条件（S1 判定）后才注入。没有这层，模型全知，
       角色不会欲言又止、没有可揭示的东西；
-    - 红线层：这个角色绝不会做的事——防 OOC 崩坏的行为闸门。
+    - 红线层：这个角色绝不会做的事——防 OOC 崩坏的行为闸门
+      （由 prompts/modules.py 只读合并进宿主 safety_guidelines /
+      negative_behaviors，随系统提示词渲染，本模块不再单独输出）。
 
 剧情覆层（overlay）是套在基础角色外的临时戏服：进入剧情时由 S1 或
 用户指定，退出剧情时摘除——演角色时她听起来还是她。
@@ -170,13 +172,10 @@ class CharacterCard:
             )
             sections.append("\n".join(lines))
 
-        if self.redlines:
-            lines = ["# 你的底线（无论什么情况都不会做）"]
-            for redline in self.redlines[-6:]:
-                lines.append(f"- {redline}")
-            sections.append("\n".join(lines))
+        # 红线（redlines）不再在此渲染：由 prompts/modules.py 合并进
+        # 宿主 safety_guidelines / negative_behaviors，随系统提示词生效。
 
-        return "\n\n".join(sections)
+        return "\n".join(sections)
 
     def hidden_condition_brief(self) -> str:
         """给 S1 的揭示条件简表（只含未揭示项）。"""

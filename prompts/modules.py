@@ -12,6 +12,7 @@ from src.app.plugin_system.api.config_api import get_config
 from src.app.plugin_system.api.log_api import get_logger
 from src.core.config import get_core_config
 from src.core.prompt import get_prompt_manager, optional, wrap, min_len
+from src.core.prompt.template import PromptTemplate
 
 from .templates import (
     NFC_SYSTEM_PROMPT,
@@ -44,8 +45,31 @@ _NFC_REQUIRED_TAGS: tuple[str, ...] = (
     "the_inner_voice", "tool_usage", "extra_context",
 )
 
+# NFC 主动思考提示词允许的全部占位名（build_proactive_context 会全部渲染）
+_NFC_PROACTIVE_PROMPT_PLACEHOLDERS: frozenset[str] = frozenset({
+    "current_time", "silence_duration",
+    "recent_activity", "proactive_decision_instruction",
+})
+
 _TAG_PATTERN = re.compile(r"</?([a-zA-Z_][a-zA-Z0-9_]*)\s*>")
 _PLACEHOLDER_PATTERN = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def _check_xml_tag_pairing(template: str) -> str:
+    """栈式校验 XML 标签开闭配对，返回错误说明（空串表示通过）。"""
+    stack: list[str] = []
+    for match in _TAG_PATTERN.finditer(template):
+        tag = match.group(1)
+        full = match.group(0)
+        if full.startswith("</"):
+            if not stack or stack[-1] != tag:
+                return f"XML 标签未配对：闭合 </{tag}> 无对应开标签"
+            stack.pop()
+        else:
+            stack.append(tag)
+    if stack:
+        return f"XML 标签未配对：开标签 <{stack[-1]}> 未闭合"
+    return ""
 
 
 def _validate_system_prompt_override(template: str) -> tuple[bool, str]:
@@ -58,18 +82,9 @@ def _validate_system_prompt_override(template: str) -> tuple[bool, str]:
         return False, "空模板，使用默认"
 
     # 1. XML 标签开闭配对（栈式匹配）
-    stack: list[str] = []
-    for match in _TAG_PATTERN.finditer(template):
-        tag = match.group(1)
-        full = match.group(0)
-        if full.startswith("</"):
-            if not stack or stack[-1] != tag:
-                return False, f"XML 标签未配对：闭合 </{tag}> 无对应开标签"
-            stack.pop()
-        else:
-            stack.append(tag)
-    if stack:
-        return False, f"XML 标签未配对：开标签 <{stack[-1]}> 未闭合"
+    tag_error = _check_xml_tag_pairing(template)
+    if tag_error:
+        return False, tag_error
 
     # 2. 必含 6 大核心标签
     for required in _NFC_REQUIRED_TAGS:
@@ -112,21 +127,108 @@ def _resolve_system_prompt_template() -> str:
     return NFC_SYSTEM_PROMPT
 
 
+def _validate_proactive_prompt_override(template: str) -> tuple[bool, str]:
+    """校验自定义主动思考提示词。
+
+    Returns:
+        (ok, reason): ok=True 时可使用；ok=False 时 reason 说明打回原因。
+    """
+    if not template or not template.strip():
+        return False, "空模板，使用默认"
+
+    # 1. XML 标签开闭配对（自定义模板无必含标签要求）
+    tag_error = _check_xml_tag_pairing(template)
+    if tag_error:
+        return False, tag_error
+
+    # 2. 所有 {占位} 必须在主动提示词可渲染占位集合内
+    for match in _PLACEHOLDER_PATTERN.finditer(template):
+        name = match.group(1)
+        if name not in _NFC_PROACTIVE_PROMPT_PLACEHOLDERS:
+            return False, f"占位 {{{name}}} 无法被 NFC 渲染"
+
+    return True, ""
+
+
+def _resolve_proactive_prompt_template() -> str:
+    """读取 config 中的 proactive_prompt_override 并校验，失败回退默认模板。"""
+    nfc_config = get_config("neo_fatum_chatter")
+    override = ""
+    if nfc_config is not None:
+        override = getattr(
+            getattr(nfc_config, "prompt", None),
+            "proactive_prompt_override",
+            "",
+        ) or ""
+
+    if not override.strip():
+        return NFC_PROACTIVE_PROMPT
+
+    if override == NFC_PROACTIVE_PROMPT:
+        return NFC_PROACTIVE_PROMPT
+
+    ok, reason = _validate_proactive_prompt_override(override)
+    if ok:
+        logger.info("NFC 主动思考提示词使用用户自定义模板")
+        return override
+
+    logger.warning(f"NFC 自定义主动思考提示词校验失败，回退默认：{reason}")
+    return NFC_PROACTIVE_PROMPT
+
+
+def _character_redlines() -> list[str]:
+    """读取 NFC 角色红线配置。
+
+    Returns:
+        去除首尾空白后的红线列表；插件配置缺失或未填写时为空列表。
+    """
+    nfc_config = get_config("neo_fatum_chatter")
+    section = getattr(nfc_config, "character", None) if nfc_config is not None else None
+    raw = getattr(section, "redlines", None) or []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _merge_redlines_into(
+    safety_guidelines: list[str],
+    negative_behaviors: list[str],
+    redlines: list[str],
+) -> tuple[list[str], list[str]]:
+    """把角色红线追加到宿主安全准则与禁止行为末尾。
+
+    Returns:
+        (合并后安全准则, 合并后禁止行为)。返回新列表，不就地修改入参
+        （core 配置视为只读，不写回 core.toml）。
+    """
+    return [*safety_guidelines, *redlines], [*negative_behaviors, *redlines]
+
+
 def register_nfc_prompts() -> None:
     """注册 NFC 所有提示词模板到 PromptManager。
 
-    在 plugin.on_plugin_loaded() 中调用一次即可。
+    在 plugin.on_plugin_loaded() 中调用；配置热重载时会重新调用，
+    使角色红线追加与 system_prompt_override / proactive_prompt_override
+    同步生效。这里刻意用 ``register_template``（同名覆盖）而不是
+    ``get_or_create``（已存在即返回旧模板），否则热重载后模板文本
+    仍是旧值，覆盖自定义永远不会生效。
     """
     config = get_core_config()
     personality = config.personality
 
+    # 角色红线并入宿主安全块（只读合并，不写回 core.toml）
+    safety_lines, negative_lines = _merge_redlines_into(
+        list(personality.safety_guidelines or []),
+        list(personality.negative_behaviors or []),
+        _character_redlines(),
+    )
+
     pm = get_prompt_manager()
 
     # 主系统提示词（支持 config.system_prompt_override 自定义，校验失败回退默认）
-    pm.get_or_create(
-        name="NFC_system_prompt",
-        template=_resolve_system_prompt_template(),
-        policies={
+    pm.register_template(
+        PromptTemplate(
+            name="NFC_system_prompt",
+            template=_resolve_system_prompt_template(),
+            policies={
             "nickname": optional(personality.nickname),
             "alias_names": optional("、".join(personality.alias_names)),
             "personality_core": optional(personality.personality_core),
@@ -150,11 +252,9 @@ def register_nfc_prompts() -> None:
                 )
             ),
             "reply_style": optional(personality.reply_style),
-            "safety_guidelines": optional(
-                "\n".join(personality.safety_guidelines)
-            ),
+            "safety_guidelines": optional("\n".join(safety_lines)),
             "negative_behaviors_section": optional(
-                "\n".join(personality.negative_behaviors)
+                "\n".join(negative_lines)
             ).then(min_len(1)).then(
                 wrap(
                     "<absolute_prohibitions>\n以下行为绝对禁止，无论任何情境你都不得违反：\n",
@@ -169,19 +269,22 @@ def register_nfc_prompts() -> None:
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ),
         },
+        ),
     )
 
-    # 主动发起提示词
-    pm.get_or_create(
-        name="NFC_proactive_prompt",
-        template=NFC_PROACTIVE_PROMPT,
-        policies={
-            "current_time": optional(
-                datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-            ),
-            "silence_duration": optional("未知"),
-            "recent_activity": optional("（无近期活动记录）"),
-        },
+    # 主动发起提示词（支持 config.proactive_prompt_override 自定义，校验失败回退默认）
+    pm.register_template(
+        PromptTemplate(
+            name="NFC_proactive_prompt",
+            template=_resolve_proactive_prompt_template(),
+            policies={
+                "current_time": optional(
+                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                ),
+                "silence_duration": optional("未知"),
+                "recent_activity": optional("（无近期活动记录）"),
+            },
+        )
     )
 
 
@@ -198,12 +301,11 @@ async def build_proactive_context(
     recent_activity: str,
     scheduled_reason: str = "",
 ) -> str:
-    """构建主动发起上下文。"""
-    pm = get_prompt_manager()
-    tmpl = pm.get_template("NFC_proactive_prompt")
-    if not tmpl:
-        return f"已沉默 {silence_minutes:.0f} 分钟"
+    """构建主动发起上下文。
 
+    模板在每次触发时重新解析（proactive_prompt_override 热更新后下一次
+    主动发起立即生效），不依赖 PromptManager 中注册实例的缓存状态。
+    """
     # 格式化沉默持续时间为可读文本
     if silence_minutes >= 60:
         hours = silence_minutes / 60
@@ -213,8 +315,20 @@ async def build_proactive_context(
 
     decision_instruction = NFC_PROACTIVE_DECISION_TOOL_CALLING
 
+    tmpl = PromptTemplate(
+        name="NFC_proactive_prompt",
+        template=_resolve_proactive_prompt_template(),
+        policies={
+            "current_time": optional(
+                datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            ),
+            "silence_duration": optional("未知"),
+            "recent_activity": optional("（无近期活动记录）"),
+        },
+    )
+
     result = await (
-        tmpl.clone()
+        tmpl
         .set("current_time", datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
         .set("silence_duration", silence_str)
         .set("recent_activity", recent_activity or "（无近期活动记录）")

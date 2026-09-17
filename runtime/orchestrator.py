@@ -25,7 +25,11 @@ from src.kernel.llm.exceptions import (
 
 from ..debug.log_formatter import log_nfc_result
 from ..domain.decision import Decision
-from ..parser import coerce_call_list, _remove_failed_tool_calls
+from ..parser import (
+    _remove_failed_tool_calls,
+    coerce_call_list,
+)
+from ..execution.reply_executor import clean_content_segments
 from ..prompts.templates import NFC_EMPTY_REPLY_RETRY_PROMPT
 from ..protocol.compat_adapter import prepare_nfc_model_set
 from ..protocol.decision_parser import parse_response_decision
@@ -37,6 +41,7 @@ from ..services.appraisal import harvest_pending_appraisal
 from ..services.context_sanitizer import (
     heal_orphan_tool_results,
     prepare_payload_chain_for_send,
+    repair_post_send_chain,
 )
 from ..services.perception_extractor import extract_reply_from_perception
 from .request_view import build_request_view, strip_transient_payloads
@@ -236,19 +241,7 @@ def _collect_empty_reply_call_ids(
         args = dict(call.args) if isinstance(call.args, dict) else {}
         raw_content = args.get("content")
 
-        content_is_empty = (
-            raw_content is None
-            or raw_content == []
-            or (isinstance(raw_content, str) and not raw_content.strip())
-            or (
-                isinstance(raw_content, list)
-                and not any(
-                    str(item).strip()
-                    for item in raw_content
-                    if item is not None
-                )
-            )
-        )
+        content_is_empty = not clean_content_segments(raw_content)
         if content_is_empty:
             call_id = getattr(call, "id", None)
             if call_id:
@@ -507,7 +500,11 @@ async def execute_orchestrator(
     loop_state = _LoopState()
 
     while True:
-        heal_orphan_tool_results(response, where="loop-top")
+        # 循环顶统一 heal + sanitize：上一轮的 purge / 摘除 / 打断竞态
+        # 可能留下配对破损的链路，而本轮 prepare_turn_input 的
+        # add_payload 会在 try 块之外触发框架校验，破损链会让异常
+        # 直接逃逸到会话循环（"执行 Chatter 出错"）。
+        prepare_payload_chain_for_send(response, reason="loop-top")
         _hot_update_summary(response, session, config)
         turn_input = await prepare_turn_input(
             chatter,
@@ -711,7 +708,7 @@ async def execute_orchestrator(
         # LLM 请求成功，重置连续失败计数与打断连击计数
         loop_state.consecutive_llm_failures = 0
         loop_state.consecutive_interrupts = 0
-        heal_orphan_tool_results(response, where="post-send")
+        repair_post_send_chain(response, reason="post-send")
         loop_state.extra_payload = None
 
         # ── 收割与主请求并行的 S1 评估（副决策，非阻塞）──
@@ -784,6 +781,9 @@ async def execute_orchestrator(
             empty_call_ids = _collect_empty_reply_call_ids(response, decision)
             if empty_call_ids:
                 _purge_empty_reply_artifacts(response, empty_call_ids)
+                # purge 在最后一个 sanitize 之后原地改链，必须在
+                # add_payload（会触发框架校验）之前先清洗回合法链路。
+                prepare_payload_chain_for_send(response, reason="空回复清理后")
 
             # 注入重试提示，要求模型重新生成有效回复
             response.add_payload(LLMPayload(ROLE.USER, Text(NFC_EMPTY_REPLY_RETRY_PROMPT)))

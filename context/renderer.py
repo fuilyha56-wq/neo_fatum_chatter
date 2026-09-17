@@ -151,12 +151,7 @@ class ContextRenderer:
         chat_stream: ChatStream,
         extra_vars: dict[str, Any] | None = None,
     ) -> str:
-        """构建稳定系统提示词。
-
-        NFC 的系统提示词是自动前缀缓存的核心锚点，不能发布
-        ``on_prompt_build`` 事件给第三方动态注入器修改。动态上下文统一
-        通过 ``nfc_user_prompt`` 的 ``context_contributions`` 注入。
-        """
+        """构建系统提示词，并允许标准 on_prompt_build 注入器参与。"""
         from ..prompts.modules import build_mental_log_hint
 
         pm = get_prompt_manager()
@@ -176,14 +171,10 @@ class ContextRenderer:
             for key, value in extra_vars.items():
                 tmpl.set(key, value)
 
-        # 绕过 on_prompt_build 事件：NFC 系统提示词不允许第三方注入修改，
-        # 以保护前缀缓存稳定性。动态上下文统一走 context_contributions 机制。
-        return tmpl._render(  # noqa: SLF001
-            tmpl.template,
-            dict(tmpl.values),
-            dict(tmpl.policies),
-            strict=False,
-        )
+        # 使用标准 PromptTemplate.build()，让已安装的 on_prompt_build 注入器
+        # （例如 prompt_injector 的 system_prompt_override）能看到 NFC_system_prompt。
+        # 只有无订阅者时才等价于直接渲染，保持正常路径的缓存稳定性。
+        return await tmpl.build(strict=False)
 
     def render_user_payload(
         self,

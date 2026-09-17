@@ -6,16 +6,23 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from src.kernel.llm import Audio, Image, LLMPayload, ReasoningText, Text, ToolCall, ToolResult, Video
 from src.kernel.llm.payload.content import File
 from src.kernel.llm.roles import ROLE
 
+from .services.context_sanitizer import prepare_payload_chain_for_send
+
 _RUNTIME_REMINDER_RE = re.compile(
 	r"\s*<system_reminder>.*?</system_reminder>\s*",
 	re.DOTALL,
 )
+_RUNTIME_USER_RE = re.compile(
+	r"^(?:你发出消息已经过去|你已经主动说了|\[proactive_trigger\])",
+)
+
 _HISTORY_ROLES = {ROLE.USER.value, ROLE.ASSISTANT.value, ROLE.TOOL_RESULT.value}
 
 
@@ -91,7 +98,10 @@ def capture_payload_snapshot(
 		role = _role_value(getattr(payload, "role", None))
 		if not role or role == ROLE.TOOL.value:
 			continue
+		if role == ROLE.ASSISTANT.value and _payload_is_suspend(payload):
+			continue
 		parts = _serialize_parts(getattr(payload, "content", []), role)
+
 		if parts:
 			entries.append(PayloadSnapshotEntry(role=role, parts=parts))
 
@@ -157,7 +167,17 @@ def restore_payload_snapshot(snapshot: PayloadSnapshot) -> list[LLMPayload]:
 
 	while restored and restored[0].role != ROLE.USER:
 		restored.pop(0)
-	return restored
+	holder = SimpleNamespace(payloads=restored)
+	prepare_payload_chain_for_send(holder, reason="snapshot-restore")
+	return list(holder.payloads)
+
+
+
+def _payload_is_suspend(payload: LLMPayload) -> bool:
+	if getattr(payload, "role", None) != ROLE.ASSISTANT:
+		return False
+	parts = getattr(payload, "content", [])
+	return len(parts) == 1 and isinstance(parts[0], Text) and parts[0].text.strip() == "__SUSPEND__"
 
 
 def _serialize_parts(parts: Any, role: str) -> list[dict[str, Any]]:
@@ -167,8 +187,11 @@ def _serialize_parts(parts: Any, role: str) -> list[dict[str, Any]]:
 	for part in values:
 		if isinstance(part, Text):
 			text = _strip_runtime_reminders(part.text) if role == ROLE.USER.value else part.text
+			if role == ROLE.USER.value and _RUNTIME_USER_RE.search(text.strip()):
+				continue
 			if text:
 				serialized.append({"type": "text", "text": text})
+
 		elif isinstance(part, ReasoningText):
 			if part.text:
 				serialized.append(

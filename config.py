@@ -12,7 +12,7 @@ from pydantic import field_validator, model_validator
 
 from src.app.plugin_system.base import BaseConfig, Field, SectionBase, config_section
 
-from .prompts.templates import NFC_SYSTEM_PROMPT
+from .prompts.templates import NFC_PROACTIVE_PROMPT, NFC_SYSTEM_PROMPT
 
 
 class NFCConfig(BaseConfig):
@@ -21,29 +21,35 @@ class NFCConfig(BaseConfig):
     name: ClassVar[str] = "config"
     description: ClassVar[str] = "NeoFatumChatter 配置"
 
-    @config_section("general")
+    @config_section("general", title="基础设置", tag="general")
     class GeneralSection(SectionBase):
         """基础配置。"""
 
-        enabled: bool = Field(default=True, description="是否启用")
+        enabled: bool = Field(default=True, description="是否启用", label="启用插件", tag="plugin")
         model_task: str = Field(
             default="actor",
             description="LLM 模型名称（对应 model.toml 中的 task），models 为空时使用",
+            label="模型任务",
         )
         models: list[str] = Field(
             default_factory=list,
             description="指定 LLM 模型列表（对应 model.toml 中的 name）。非空时覆盖 model_task，多个模型按顺序 fallback",
+            label="模型列表",
+            input_type="list",
         )
         temperature: float = Field(
             default=0.7,
             description="模型温度，仅在 models 非空时生效",
+            label="温度",
         )
         max_tokens: int = Field(
             default=8000,
             description="最大输出 token 数，仅在 models 非空时生效",
+            label="最大输出 Token",
         )
         native_multimodal: bool = Field(
             default=False,
+            label="原生多模态",
             description=(
                 "原生多模态模式。启用后，图片直接打包进 LLM payload，"
                 "由主模型在对话上下文中理解图片内容并做出响应。"
@@ -52,6 +58,7 @@ class NFCConfig(BaseConfig):
         )
         max_images_per_payload: int = Field(
             default=4,
+            label="单次图片配额",
             description=(
                 "原生多模态模式下的总图片配额（整个 payload 中所有来源的图片上限）。"
                 "配额由 bot 已发图片、用户新消息图片、历史图片三者共同占用，"
@@ -61,6 +68,7 @@ class NFCConfig(BaseConfig):
         )
         use_tool_calling: bool = Field(
             default=True,
+            label="工具调用开关（已废弃）",
             description=(
                 "（已废弃）历史上用于切换主动发起/超时上下文是否使用工具调用决策提示。"
                 "NFC 当前统一走工具调用协议，此字段不再生效，保留仅为向后兼容旧配置。"
@@ -68,6 +76,7 @@ class NFCConfig(BaseConfig):
         )
         max_compat_retries: int = Field(
             default=1,
+            label="纯文本重试次数",
             description=(
                 "纯文本感知草稿未形成工具调用时的最大重试次数。"
                 "NFC 会把该轮输出视为未发送草稿，并注入 tool-call 约束后重试。"
@@ -76,6 +85,7 @@ class NFCConfig(BaseConfig):
         )
         perception_extract_task: str = Field(
             default="sub_actor",
+            label="感知提取模型",
             description=(
                 "感知阶段兜底回填时，用于提取回复内容的模型任务名称。"
                 "设为 'sub_actor' 使用轻量模型（默认，省开销），"
@@ -85,6 +95,7 @@ class NFCConfig(BaseConfig):
         )
         max_empty_reply_retries: int = Field(
             default=2,
+            label="空回复重试次数",
             description=(
                 "模型调用 nfc_reply 但 content 为空（空包弹）时的最大重试次数。"
                 "NFC 会注入提示要求模型重新生成有效回复内容后再次发送。"
@@ -93,6 +104,7 @@ class NFCConfig(BaseConfig):
         )
         max_consecutive_llm_failures: int = Field(
             default=15,
+            label="连续失败上限",
             description=(
                 "连续 LLM 请求失败的最大容忍次数。"
                 "超过此值后终止当前会话循环并报告失败。"
@@ -101,6 +113,8 @@ class NFCConfig(BaseConfig):
         )
         custom_decision_prompt: str = Field(
             default="",
+            label="自定义决策提示词",
+            input_type="textarea",
             description=(
                 "自定义决策提示词。用于指导 NFC 的决策行为，"
                 "会被注入到系统提示词的安全准则之后。留空则不生效。"
@@ -108,12 +122,15 @@ class NFCConfig(BaseConfig):
         )
         blocked_tools: list[str] = Field(
             default_factory=lambda: ["send_text", "pass_and_wait", "stop_conversation"],
+            label="屏蔽工具列表",
             description=(
                 "需要从工具列表中屏蔽的工具末段名称（不含组件类型前缀）。"
                 "列表中的工具不会暴露给 LLM。"
             ),
         )
         segment_instruction: str = Field(
+            label="分段指令模板",
+            input_type="textarea",
             default=(
                 "## 消息分段发送\n"
                 "你可以把回复拆成多条消息分开发送，模仿真人边想边打字的节奏，想到什么就发什么。\n"
@@ -131,6 +148,8 @@ class NFCConfig(BaseConfig):
             ),
         )
         wait_instruction: str = Field(
+            label="等待时长指导",
+            input_type="textarea",
             default=(
                 "### max_wait_seconds（等待时长）\n\n"
                 "这个参数描述的是你发完消息后是否在等回复。\n\n"
@@ -146,6 +165,7 @@ class NFCConfig(BaseConfig):
         )
         enable_custom_tick_interval: bool = Field(
             default=False,
+            label="启用独立 tick 间隔",
             description=(
                 "是否启用 NFC 独立的主循环 tick 间隔。"
                 "关闭时跟随主程序 bot.tick_interval 全局配置；"
@@ -154,6 +174,7 @@ class NFCConfig(BaseConfig):
         )
         custom_tick_interval: float = Field(
             default=5.0,
+            label="tick 间隔（秒）",
             description=(
                 "NFC 独立主循环 tick 间隔（秒），仅在 enable_custom_tick_interval 为 true 时生效。"
                 "过短会增加消耗，过长会降低响应速度。必须大于 0。"
@@ -167,25 +188,28 @@ class NFCConfig(BaseConfig):
             v = float(value)
             return v if v > 0 else 5.0
 
-    @config_section("wait")
+    @config_section("wait", title="等待机制", tag="timer")
     class WaitSection(SectionBase):
         """等待机制配置。"""
 
         enabled: bool = Field(
             default=True,
+            label="启用回复等待",
             description="是否启用回复等待。设为 false 后模型不再等待用户回复",
         )
-        min_seconds: float = Field(default=10.0, description="最小等待秒数")
-        max_seconds: float = Field(default=600.0, description="最大等待秒数")
+        min_seconds: float = Field(default=10.0, description="最小等待秒数", label="最小等待（秒）")
+        max_seconds: float = Field(default=600.0, description="最大等待秒数", label="最大等待（秒）")
         max_consecutive_timeouts: int = Field(
-            default=3, description="连续超时上限，达到后不再等待"
+            default=3, description="连续超时上限，达到后不再等待", label="连续超时上限"
         )
         suppress_early_wake: bool = Field(
-            default=True,
+            default=False,
+            label="抑制提前唤醒",
             description=(
                 "等待期间收到新消息时是否抑制提前唤醒。"
                 "开启后，Bot 在等待超时到达前不会因为新消息提前触发 LLM，"
-                "所有消息在等待结束后统一处理。"
+                "所有消息在等待结束后统一处理；"
+                "默认关闭，新消息会立即打断等待并提前触发 LLM。"
             ),
         )
 
@@ -207,26 +231,28 @@ class NFCConfig(BaseConfig):
             self.max_consecutive_timeouts = max(0, int(self.max_consecutive_timeouts))
             return self
 
-    @config_section("proactive")
+    @config_section("proactive", title="主动发起", tag="timer")
     class ProactiveSection(SectionBase):
         """主动发起配置。"""
 
-        enabled: bool = Field(default=True, description="是否启用主动发起")
+        enabled: bool = Field(default=True, description="是否启用主动发起", label="启用主动发起", tag="plugin")
         silence_threshold: int = Field(
-            default=7200, description="沉默阈值(秒)，超过后可能主动发起"
+            default=7200, description="沉默阈值(秒)，超过后可能主动发起", label="沉默阈值（秒）"
         )
         trigger_probability: float = Field(
-            default=0.3, description="主动发起触发概率"
+            default=0.3, description="主动发起触发概率", label="触发概率"
         )
         min_interval: int = Field(
-            default=1800, description="两次主动发起最小间隔(秒)"
+            default=1800, description="两次主动发起最小间隔(秒)", label="最小间隔（秒）"
         )
-        quiet_hours_start: str = Field(default="23:00", description="勿扰开始时间")
-        quiet_hours_end: str = Field(default="07:00", description="勿扰结束时间")
+        quiet_hours_start: str = Field(default="23:00", description="勿扰开始时间", label="勿扰开始", placeholder="23:00")
+        quiet_hours_end: str = Field(default="07:00", description="勿扰结束时间", label="勿扰结束", placeholder="07:00")
         check_interval: int = Field(
-            default=60, description="主动发起检查间隔(秒)"
+            default=60, description="主动发起检查间隔(秒)", label="检查间隔（秒）"
         )
         schedule_guidance: str = Field(
+            label="预约使用指导",
+            input_type="textarea",
             default=(
                 "预约是你和 Ta 保持长线联系的主要方式，不是偶尔才想到的工具。\n\n"
                 "每次对话之后，自然地想一想「下次什么时候联系 Ta？」，有想法就设一下，"
@@ -245,6 +271,7 @@ class NFCConfig(BaseConfig):
         )
         activity_service_signature: str = Field(
             default="",
+            label="活跃度服务签名",
             description=(
                 "活跃度判断服务的签名（如 better_chat_time:service:better_chat_time）。"
                 "为空时使用内置的 is_user_typically_active_now()。"
@@ -254,6 +281,7 @@ class NFCConfig(BaseConfig):
         activity_service_method: str = Field(
             default="is_good_time",
             description="活跃度服务上调用的方法名，该方法需接受 (stream_id: str) 返回 float 0~1",
+            label="活跃度方法名",
         )
 
         @field_validator("trigger_probability", mode="after")
@@ -271,29 +299,32 @@ class NFCConfig(BaseConfig):
                 return v
             return 1800 if info.field_name == "min_interval" else 60
 
-    @config_section("reply")
+    @config_section("reply", title="回复节奏", tag="performance")
     class ReplySection(SectionBase):
         """回复配置。"""
 
         typing_chars_per_sec: float = Field(
-            default=15.0, description="模拟打字速度(字/秒)"
+            default=15.0, description="模拟打字速度(字/秒)", label="打字速度（字/秒）"
         )
         typing_delay_min: float = Field(
-            default=0.8, description="最小打字延迟(秒)"
+            default=0.8, description="最小打字延迟(秒)", label="最小打字延迟（秒）"
         )
         typing_delay_max: float = Field(
-            default=4.0, description="最大打字延迟(秒)"
+            default=4.0, description="最大打字延迟(秒)", label="最大打字延迟（秒）"
         )
         segment_delay_min: float = Field(
             default=0.5,
             description="多段消息之间的最小间隔(秒)，模拟真人打完一条再打下一条的节奏",
+            label="分段最小间隔（秒）",
         )
         segment_delay_max: float = Field(
             default=2.0,
             description="多段消息之间的最大间隔(秒)",
+            label="分段最大间隔（秒）",
         )
         semantic_delays: bool = Field(
             default=True,
+            label="语义化延迟",
             description=(
                 "启用语义化打字延迟：段间延迟按下一段的字数（typing_chars_per_sec）、"
                 "标点语气（问句/感叹/省略号）动态计算，而非纯随机。"
@@ -302,6 +333,7 @@ class NFCConfig(BaseConfig):
         )
         streaming_enabled: bool = Field(
             default=False,
+            label="流式回复",
             description=(
                 "是否启用流式回复（打字机效果）。启用后，长消息会分块逐步发送，"
                 "模拟真人边打字边发送的体验。需要平台适配器支持编辑消息。"
@@ -309,6 +341,7 @@ class NFCConfig(BaseConfig):
         )
         streaming_service_signature: str = Field(
             default="",
+            label="流式服务签名",
             description=(
                 "流式回复 Service 签名。"
                 "留空时自动发现支持 start_streaming 的 Service。"
@@ -317,10 +350,12 @@ class NFCConfig(BaseConfig):
         streaming_chunk_size: int = Field(
             default=10,
             description="流式回复每次追加的字符数",
+            label="分块字符数",
         )
         streaming_interval: float = Field(
             default=0.1,
             description="流式回复每次追加之间的间隔(秒)",
+            label="追加间隔（秒）",
         )
 
         @model_validator(mode="after")
@@ -337,12 +372,13 @@ class NFCConfig(BaseConfig):
                 )
             return self
 
-    @config_section("prompt")
+    @config_section("prompt", title="提示词与记忆", tag="ai")
     class PromptSection(SectionBase):
         """提示词配置。"""
 
         request_snapshot_enabled: bool = Field(
             default=True,
+            label="保存请求快照",
             description=(
                 "保存每次实际发送给模型的完整请求体，并在进程重启后的首次 NFC 请求中恢复。"
             ),
@@ -350,6 +386,7 @@ class NFCConfig(BaseConfig):
 
         summary_enabled: bool = Field(
             default=True,
+            label="启用记忆摘要",
             description=(
                 "是否启用近期记忆摘要。"
                 "关闭后不再触发摘要压缩任务，也不再向提示词注入 history_summary；"
@@ -357,30 +394,35 @@ class NFCConfig(BaseConfig):
             ),
         )
         max_log_entries: int = Field(
-            default=50, description="最大活动流条目数"
+            default=50, description="最大活动流条目数", label="活动流条目上限"
         )
         max_context_payloads: int = Field(
-            default=20, description="LLM 上下文持久化链最大条目数（超出时裁剪最旧的 USER/ASSISTANT 对）"
+            default=20, description="LLM 上下文持久化链最大条目数（超出时裁剪最旧的 USER/ASSISTANT 对）", label="上下文链上限"
         )
         max_initial_chain_payloads: int = Field(
             default=12,
             description="execute 启动时最多恢复进 LLM 的持久化 chain payload 条数，不影响持久化保留数量",
+            label="启动恢复条数",
         )
         max_fused_narrative_chars: int = Field(
             default=12000,
             description="融合叙事最大字符数，超出时仅保留最近部分，降低框架 token 裁剪触发概率",
+            label="融合叙事字符上限",
         )
         compress_every_n_rounds: int = Field(
             default=50,
             description="每完成 N 轮对话触发一次近期记忆压缩（1 轮 = 1 次 USER→ASSISTANT 交换）",
+            label="压缩周期（轮）",
         )
         compress_days_window: float = Field(
             default=3.0,
             description="压缩时覆盖的历史时间窗口（天），只对该窗口内的消息做摘要",
+            label="压缩时间窗口（天）",
         )
         min_compress_interval_minutes: float = Field(
             default=120.0,
             description="两次压缩之间的最短间隔（分钟），防止频繁触发",
+            label="最短压缩间隔（分钟）",
         )
         system_prompt_override: str = Field(
             default=NFC_SYSTEM_PROMPT,
@@ -407,14 +449,42 @@ class NFCConfig(BaseConfig):
             placeholder="默认已填入标准模板，可直接修改",
             tag="prompt",
         )
+        proactive_prompt_override: str = Field(
+            default=NFC_PROACTIVE_PROMPT,
+            description=(
+                "主动思考提示词模板（沉默后/预约到期主动发起时的思考上下文）。\n"
+                "\n"
+                "默认已填入 NFC 标准模板，可直接在此修改并保存。\n"
+                "\n"
+                "标准模板源码位置：prompts/templates.py 中的 NFC_PROACTIVE_PROMPT。\n"
+                "\n"
+                "可用占位：{current_time}（当前时间）、{silence_duration}（沉默时长）、"
+                "{recent_activity}（近期互动）、{proactive_decision_instruction}（决策指令，"
+                "一般保留此占位以获得工具调用约束）。\n"
+                "\n"
+                "若修改后想恢复原状，请删掉本行（整行 proactive_prompt_override 配置），"
+                "下次启动框架会自动用标准模板重新填回。\n"
+                "\n"
+                "保存时会校验：\n"
+                "- 所有 XML 标签开闭配对；\n"
+                "- 所有 {占位} 必须是上述可用占位名。\n"
+                "任一不满足则打回标准模板并在日志记录。"
+            ),
+            label="主动思考提示词自定义",
+            input_type="textarea",
+            rows=20,
+            placeholder="默认已填入标准模板，可直接修改",
+            tag="prompt",
+        )
 
 
-    @config_section("buffer")
+    @config_section("buffer", title="消息积累与打断", tag="performance")
     class BufferSection(SectionBase):
         """消息积累与打断配置。"""
 
         accumulate_window: float = Field(
             default=1.5,
+            label="积累窗口（秒）",
             description=(
                 "消息积累窗口（秒）。检测到第一条消息后等待此时长，"
                 "以收集同一时段连发的多条消息，避免对每条消息单独触发 LLM。"
@@ -423,6 +493,7 @@ class NFCConfig(BaseConfig):
         )
         accumulate_max_window: float = Field(
             default=5.0,
+            label="积累窗口上限（秒）",
             description=(
                 "积累窗口最大总时长（秒）。即使消息持续到达，"
                 "超过此时长后强制提交，防止积累无限延迟。"
@@ -430,6 +501,7 @@ class NFCConfig(BaseConfig):
         )
         interrupt_enabled: bool = Field(
             default=True,
+            label="启用生成打断",
             description=(
                 "是否启用 LLM 生成打断。启用后，LLM 生成期间若检测到"
                 "新消息到达，将取消当前 LLM 请求并以全量消息重新发起。"
@@ -437,6 +509,7 @@ class NFCConfig(BaseConfig):
         )
         interrupt_poll_seconds: float = Field(
             default=0.5,
+            label="打断轮询间隔（秒）",
             description=(
                 "打断检测轮询间隔（秒）。LLM 生成期间每隔此时间检查"
                 "一次是否有新消息到达。值越小响应越快，CPU 占用略高。"
@@ -444,6 +517,7 @@ class NFCConfig(BaseConfig):
         )
         interrupt_cooldown: float = Field(
             default=3.0,
+            label="打断冷却（秒）",
             description=(
                 "打断后冷却基准时长（秒）。打断后等待此时长再重新发起请求，"
                 "以收集可能连发的后续消息；连续打断时冷却时间递增。"
@@ -451,6 +525,7 @@ class NFCConfig(BaseConfig):
         )
         max_consecutive_interrupts: int = Field(
             default=3,
+            label="连续打断上限",
             description=(
                 "连续打断上限。达到后不再打断 LLM 生成，等本次请求完成后"
                 "统一处理新消息，防止高频消息把 LLM 调用拖入无限重启。"
@@ -463,12 +538,13 @@ class NFCConfig(BaseConfig):
             """将消息缓冲与轮询时间规整为非负数。"""
             return max(0.0, float(value))
 
-    @config_section("flashback")
+    @config_section("flashback", title="记忆注入点", tag="advanced")
     class FlashbackSection(SectionBase):
         """注入点兼容配置。"""
 
         injection_point: str = Field(
             default="default_chatter_user_prompt",
+            label="注入点名称",
             description=(
                 "NFC user prompt 构建时触发的 on_prompt_build 事件注入点名称。"
                 "默认对齐 booku_memory 等主流注入器订阅的 default_chatter_user_prompt；"
@@ -485,12 +561,13 @@ class NFCConfig(BaseConfig):
                 return "default_chatter_user_prompt"
             return v
 
-    @config_section("drives")
+    @config_section("drives", title="内驱状态机", tag="ai")
     class DrivesSection(SectionBase):
         """内驱状态机配置（角色的潜意识层）。"""
 
         enabled: bool = Field(
             default=True,
+            label="启用内驱",
             description=(
                 "是否启用内驱状态机。启用后角色拥有随时间演化的内部状态"
                 "（社交欲/精力/好奇心/被忽视感/情绪基线），并调制等待时长、"
@@ -499,6 +576,7 @@ class NFCConfig(BaseConfig):
         )
         modulation_strength: float = Field(
             default=0.3,
+            label="调制强度",
             description=(
                 "内驱对等待时长的调制强度（0~1）。0 = 只展示状态不影响数值，"
                 "越大影响越明显（调制倍率被夹在 0.5~2.0 倍）。"
@@ -506,6 +584,7 @@ class NFCConfig(BaseConfig):
         )
         tick_interval: int = Field(
             default=60,
+            label="演化间隔（秒）",
             description="内驱后台演化间隔（秒），只推进内存中的活跃会话，不产生 IO。",
         )
 
@@ -519,12 +598,13 @@ class NFCConfig(BaseConfig):
         def _positive_tick(cls, value: int) -> int:
             return max(10, int(value))
 
-    @config_section("appraisal")
+    @config_section("appraisal", title="S1 感知评估", tag="ai")
     class AppraisalSection(SectionBase):
         """S1 感知评估配置（System 1：每批消息的结构化第一反应）。"""
 
         enabled: bool = Field(
             default=True,
+            label="启用 S1 评估",
             description=(
                 "是否启用 S1 感知评估。每批新消息先用轻量模型产出结构化评估："
                 "情绪反应、登记簿归属（现实/故事）、场景/剧情事实、话题钩子、"
@@ -534,13 +614,16 @@ class NFCConfig(BaseConfig):
         model_task: str = Field(
             default="sub_actor",
             description="S1 评估使用的模型任务名（建议轻量模型）。",
+            label="评估模型任务",
         )
         timeout_seconds: float = Field(
             default=8.0,
             description="S1 评估的超时秒数，超时视为本轮无评估。",
+            label="评估超时（秒）",
         )
         defer_enabled: bool = Field(
             default=True,
+            label="启用自然延迟",
             description=(
                 "是否启用 S1 自然延迟：评估建议'缓一缓再回'时，该意见在"
                 "下一批消息的决策请求发起前生效（让出建议的等待秒数），"
@@ -550,10 +633,12 @@ class NFCConfig(BaseConfig):
         max_defer_seconds: float = Field(
             default=18.0,
             description="单次自然延迟的上限（秒）。",
+            label="延迟上限（秒）",
         )
         min_input_chars: int = Field(
             default=8,
             description="消息文本短于此长度时跳过 S1 评估（省钱，按消息本体字符数计量）。",
+            label="最短评估字符数",
         )
 
         @field_validator("timeout_seconds", "max_defer_seconds", mode="after")
@@ -561,19 +646,25 @@ class NFCConfig(BaseConfig):
         def _positive_seconds(cls, value: float) -> float:
             return max(0.5, float(value))
 
-    @config_section("character")
+    @config_section("character", title="角色卡", tag="user")
     class CharacterSection(SectionBase):
         """角色卡配置（三层人设：红线 + 隐藏事实 + 剧情覆层）。"""
 
         redlines: list[str] = Field(
             default_factory=list,
+            label="行为红线",
+            input_type="list",
             description=(
                 "角色的行为红线——无论什么情况都不会做的事。"
                 "例如：['不会发语音', '不会讨论政治话题']。"
+                "非空时会自动追加到 core.toml 的安全准则（safety_guidelines）"
+                "与禁止行为（negative_behaviors）末尾，随系统提示词生效；"
+                "配置热重载后立即更新。"
             ),
         )
         hidden_facts: list[dict[str, str]] = Field(
             default_factory=list,
+            label="隐藏事实",
             description=(
                 "角色的隐藏事实（秘密/过去/真实想法）。平时不进提示词，"
                 "S1 判定揭示条件满足后才注入，角色因此可以欲言又止、有秘密可揭。"
@@ -582,12 +673,13 @@ class NFCConfig(BaseConfig):
             ),
         )
 
-    @config_section("beliefs")
+    @config_section("beliefs", title="信念层", tag="ai")
     class BeliefsSection(SectionBase):
         """信念层配置（对用户/关系的持久化理解）。"""
 
         enabled: bool = Field(
             default=True,
+            label="启用信念固化",
             description=(
                 "是否启用信念固化。每次记忆压缩完成后，额外用轻量模型从"
                 "近期事件中蒸馏对用户/关系的持久判断，渲染为'你已经知道的'块。"
@@ -596,18 +688,61 @@ class NFCConfig(BaseConfig):
         model_task: str = Field(
             default="sub_actor",
             description="信念蒸馏使用的模型任务名。",
+            label="蒸馏模型任务",
         )
         max_extract: int = Field(
             default=5,
             description="每次蒸馏最多提取的信念条数。",
+            label="单次提取上限",
         )
 
-    @config_section("intent")
+    @config_section("world", title="世界状态", tag="ai")
+    class WorldSection(SectionBase):
+        """现实登记簿的日程化世界状态（角色自己的日常，设计源自 private_companion）。"""
+
+        enabled: bool = Field(
+            default=True,
+            label="启用世界状态",
+            description=(
+                "是否启用日程化世界状态。启用后角色拥有自己的作息与日常："
+                "按五段日程窗口（深夜/早晨/中午/下午/晚上）推导'此刻大概在做什么'，"
+                "并渲染进每轮提示词（turn 级，不进对话链）。"
+                "角色也可用 nfc_update_world 工具自述当前活动。"
+            ),
+        )
+        wake_time: str = Field(
+            default="07:30",
+            description="角色起床时间（HH:MM），用于判断'应在睡觉'的时段。",
+            label="起床时间",
+        )
+        sleep_time: str = Field(
+            default="22:30",
+            description="角色入睡时间（HH:MM）。",
+            label="入睡时间",
+        )
+        location: str = Field(
+            default="",
+            description="角色默认位置（如'家里'）。留空则只在使用信息后才有位置。",
+            label="默认位置",
+        )
+        routine: dict[str, str] = Field(
+            default_factory=dict,
+            description=(
+                "作息模板：窗口名 -> 此刻大概在做什么。窗口名可用："
+                "深夜/早晨/中午/下午/晚上（或凌晨/早上/傍晚等别名）。"
+                "例：{'早晨': '晨跑和吃早餐', '下午': '图书馆自习'}。"
+                "未配置的窗口用内置默认模板。"
+            ),
+            label="作息模板",
+        )
+
+    @config_section("intent", title="主动意图队列", tag="ai")
     class IntentSection(SectionBase):
         """主动意图队列配置。"""
 
         enabled: bool = Field(
             default=True,
+            label="启用意图队列",
             description=(
                 "是否启用意图队列。话题钩子/到期承诺/内驱冲动以冲动值竞争，"
                 "最强者越过阈值即触发主动发起（有目的的主动）。"
@@ -617,6 +752,7 @@ class NFCConfig(BaseConfig):
         fire_threshold: float = Field(
             default=0.75,
             description="意图触发阈值（0~1），冲动值达到后允许触发。",
+            label="触发阈值",
         )
 
         @field_validator("fire_threshold", mode="after")
@@ -624,12 +760,13 @@ class NFCConfig(BaseConfig):
         def _clamp_threshold(cls, value: float) -> float:
             return max(0.1, min(float(value), 1.0))
 
-    @config_section("memo")
+    @config_section("memo", title="备忘录", tag="ai")
     class MemoSection(SectionBase):
         """备忘录配置（LLM 显式中短期便签）。"""
 
         enabled: bool = Field(
             default=True,
+            label="启用备忘录",
             description=(
                 "是否启用备忘录。启用后模型可调用 nfc_memo / nfc_memo_delete "
                 "给自己记带过期时间的便签，便签渲染进每轮提示词末尾"
@@ -639,18 +776,22 @@ class NFCConfig(BaseConfig):
         max_entries: int = Field(
             default=10,
             description="单聊最大有效备忘条数，超出按创建时间淘汰最早一条。",
+            label="单聊条数上限",
         )
         default_expire_hours: float = Field(
             default=24.0,
             description="模型未指定 expire_hours 时的默认存活时长（小时）。",
+            label="默认存活（小时）",
         )
         min_expire_hours: float = Field(
             default=1.0,
             description="单条备忘最短存活时长（小时）。",
+            label="最短存活（小时）",
         )
         max_expire_hours: float = Field(
             default=336.0,
             description="单条备忘最长存活时长（小时），默认 14 天。",
+            label="最长存活（小时）",
         )
 
         @field_validator("max_entries", mode="after")
@@ -668,17 +809,19 @@ class NFCConfig(BaseConfig):
         def _positive_hours(cls, value: float) -> float:
             return max(0.1, float(value))
 
-    @config_section("debug")
+    @config_section("debug", title="调试", tag="debug")
     class DebugSection(SectionBase):
         """调试配置。"""
 
         show_prompt: bool = Field(
             default=False,
             description="是否在日志中显示发送给 LLM 的完整提示词",
+            label="显示提示词",
         )
         show_response: bool = Field(
             default=True,
             description="是否在日志中显示 LLM 响应的美化摘要",
+            label="显示响应摘要",
         )
 
     general: GeneralSection = Field(default_factory=GeneralSection)
@@ -692,6 +835,7 @@ class NFCConfig(BaseConfig):
     appraisal: AppraisalSection = Field(default_factory=AppraisalSection)
     character: CharacterSection = Field(default_factory=CharacterSection)
     beliefs: BeliefsSection = Field(default_factory=BeliefsSection)
+    world: WorldSection = Field(default_factory=WorldSection)
     intent: IntentSection = Field(default_factory=IntentSection)
     memo: MemoSection = Field(default_factory=MemoSection)
     debug: DebugSection = Field(default_factory=DebugSection)

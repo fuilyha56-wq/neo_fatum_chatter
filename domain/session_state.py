@@ -24,17 +24,21 @@ from src.app.plugin_system.api.log_api import get_logger
 from ..mental_log import MentalLog, MentalLogEntry
 from ..models import NFCEventType, WaitingConfig
 from .beliefs import BeliefBook
-from .character_card import CharacterCard
+from .daily_life import DailyLifeState
 from .drives import DriveState
 from .intent import IntentQueue
 from .memo import Memo, MemoBook
+from .proactive_candidate import (
+    CANDIDATE_CANCELLED,
+    CANDIDATE_EXPIRED,
+    ProactiveCandidate,
+)
 from .scene_state import SceneState
 from .world import (
     REGISTER_REALITY,
     REGISTER_STORY,
     StoryArchiveEntry,
     WorldState,
-    WorldTracker,
 )
 
 logger = get_logger("NFC_session_state")
@@ -193,6 +197,10 @@ class NFCSession:
     story_world: WorldState | None = None
     story_archive: list[StoryArchiveEntry] = field(default_factory=list)
 
+    # 现实登记簿的日程化世界状态：作息锚点、当日计划、角色自述与观察，
+    # 给角色"自己在生活"的连续日常（设计移植自 private_companion）。
+    daily_life: DailyLifeState = field(default_factory=DailyLifeState)
+
     # 信念层：对用户/关系/剧情的持久化理解（带置信度）
     beliefs: BeliefBook = field(default_factory=BeliefBook)
 
@@ -201,6 +209,9 @@ class NFCSession:
 
     # 备忘录：LLM 显式写入的中短期便签（带过期时间），详见 domain/memo.py
     memos: MemoBook = field(default_factory=MemoBook)
+
+    # 主动候选生命周期（candidate 不是发送保证，发送仍由 thinker/handler 决定）
+    proactive_candidates: list[ProactiveCandidate] = field(default_factory=list)
 
     # 角色卡运行时状态（揭示了的隐藏事实 id + 活跃覆层）
     character_state: dict[str, Any] = field(default_factory=dict)
@@ -264,6 +275,9 @@ class NFCSession:
         self.consecutive_timeout_count = 0
         self.last_user_message_at = msg_time
         self.last_activity_at = msg_time
+        # 新消息使等待中的 continuation 候选失去必要性，但不影响承诺类候选。
+        self.cancel_proactive_candidates(route="continuation", reason="user_message")
+        self.cancel_proactive_candidates(route="silence", reason="user_message")
         # 记录用户活跃时段
         self.record_activity_hour(msg_time)
         # 内驱：对方来消息，社交欲得到回应、被忽视感消散
@@ -436,6 +450,64 @@ class NFCSession:
         ]
         return len(self.user_habits) != original_count
 
+    def upsert_proactive_candidate(self, candidate: ProactiveCandidate) -> ProactiveCandidate:
+        """按 dedupe_key 幂等加入主动候选。"""
+        for existing in self.proactive_candidates:
+            if existing.dedupe_key != candidate.dedupe_key:
+                continue
+            # 终态候选是历史事实：同一 origin 不重新生成第二条记录。
+            if existing.is_terminal:
+                return existing
+            changed = False
+            if candidate.reason and candidate.reason != existing.reason:
+                existing.reason = candidate.reason
+                changed = True
+            preferred_at = (
+                min(existing.preferred_at, candidate.preferred_at)
+                if existing.preferred_at and candidate.preferred_at
+                else (existing.preferred_at or candidate.preferred_at)
+            )
+            if preferred_at != existing.preferred_at:
+                existing.preferred_at = preferred_at
+                changed = True
+            expire_at = max(existing.expire_at, candidate.expire_at)
+            if expire_at != existing.expire_at:
+                existing.expire_at = expire_at
+                changed = True
+            if changed:
+                existing.revision += 1
+                existing.updated_at = time.time()
+            return existing
+        self.proactive_candidates.append(candidate)
+        self.proactive_candidates = self.proactive_candidates[-24:]
+        return candidate
+
+    def cancel_proactive_candidates(self, *, route: str = "", reason: str = "user_message") -> int:
+        """用户新消息到达时取消冲突的 continuation 候选。"""
+        changed = 0
+        for candidate in self.proactive_candidates:
+            if candidate.is_terminal:
+                continue
+            if route and candidate.route != route:
+                continue
+            if candidate.mark(CANDIDATE_CANCELLED, reason=reason):
+                changed += 1
+        return changed
+
+    def expire_proactive_candidates(self, now: float | None = None) -> int:
+        now = float(now if now is not None else time.time())
+        changed = 0
+        for candidate in self.proactive_candidates:
+            if candidate.status == "dispatching" and now - candidate.updated_at > 300:
+                if candidate.mark("queued", reason="dispatch_timeout"):
+                    changed += 1
+                continue
+            if candidate.is_terminal or not candidate.expire_at or now < candidate.expire_at:
+                continue
+            if candidate.mark(CANDIDATE_EXPIRED, reason="candidate_expired"):
+                changed += 1
+        return changed
+
     def update_chain(
         self, new_entries: list[dict[str, Any]], max_payloads: int
     ) -> None:
@@ -515,6 +587,10 @@ class NFCSession:
         # 内驱/信念/意图/习惯/备忘录/角色卡揭示状态属于长期资产，保留。
         self.story_world = None
         self.active_register = REGISTER_REALITY
+        # 剧情属于会话上下文；清空后临时人格覆层也必须摘除，
+        # 但 revealed_fact_ids 等长期角色状态继续保留。
+        if isinstance(self.character_state, dict) and "active_overlay" in self.character_state:
+            self.character_state["active_overlay"] = None
         self.respond_not_before = 0.0
 
         if hasattr(self, "_nfc_request_snapshot_restored"):
@@ -584,9 +660,11 @@ class NFCSession:
             "active_register": self.active_register,
             "story_world": self.story_world.to_dict() if self.story_world else None,
             "story_archive": [e.to_dict() for e in self.story_archive],
+            "daily_life": self.daily_life.to_dict(),
             "beliefs": self.beliefs.to_list(),
             "intents": self.intents.to_list(),
             "memos": self.memos.to_list(),
+            "proactive_candidates": [c.to_dict() for c in self.proactive_candidates],
             "character_state": dict(self.character_state),
         }
 
@@ -706,9 +784,19 @@ class NFCSession:
                 entry = StoryArchiveEntry.from_dict(item)
                 if entry is not None:
                     session.story_archive.append(entry)
+        session.story_archive = session.story_archive[-5:]
         session.beliefs = BeliefBook.from_list(data.get("beliefs"))
+        session.daily_life = DailyLifeState.from_dict(data.get("daily_life"))
         session.intents = IntentQueue.from_list(data.get("intents"))
         session.memos = MemoBook.from_list(data.get("memos"))
+        raw_candidates = data.get("proactive_candidates", [])
+        if isinstance(raw_candidates, list):
+            session.proactive_candidates = [
+                candidate
+                for raw in raw_candidates
+                for candidate in [ProactiveCandidate.from_dict(raw)]
+                if candidate is not None
+            ][-24:]
         raw_char_state = data.get("character_state", {})
         session.character_state = (
             dict(raw_char_state) if isinstance(raw_char_state, dict) else {}

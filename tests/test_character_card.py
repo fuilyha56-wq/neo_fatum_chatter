@@ -72,3 +72,24 @@ def test_overlay_renders_with_leak_hint() -> None:
 def test_empty_card_renders_nothing() -> None:
     assert CharacterCard().render_prompt() == ""
     assert CharacterCard().hidden_condition_brief() == ""
+
+
+def test_redlines_merged_into_core_safety_blocks() -> None:
+    """红线只读追加到宿主安全准则/禁止行为末尾，不写回 core.toml。"""
+    from neo_fatum_chatter.prompts.modules import _merge_redlines_into
+
+    safety = ["准则A"]
+    negative = ["禁止B"]
+    merged_safety, merged_negative = _merge_redlines_into(
+        safety, negative, ["不会发语音"]
+    )
+
+    assert merged_safety == ["准则A", "不会发语音"]
+    assert merged_negative == ["禁止B", "不会发语音"]
+    # 只读合并：原列表不被就地修改
+    assert safety == ["准则A"]
+    assert negative == ["禁止B"]
+    # 空红线时保持原样
+    empty_safety, empty_negative = _merge_redlines_into(safety, negative, [])
+    assert empty_safety == ["准则A"]
+    assert empty_negative == ["禁止B"]

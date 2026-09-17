@@ -39,6 +39,8 @@ NFC 的对外接口分为五类：**组件入口**（Chatter / Action / EventHan
 | `QueryActivityPatternAction` | `nfc_query_activity_pattern` | `actions/query_activity_pattern.py:29` | 时间范围查询 |
 | `RecordHabitAction` | `nfc_record_habit` | `actions/record_habit.py:16` | 习惯观察写入 session |
 | `QueryHabitsAction` | `nfc_query_habits` | `actions/query_habits.py:27` | 按分类查询习惯 |
+| `UpdateWorldAction` | `nfc_update_world` | `actions/update_world.py:18` | `activity` `end_time` `location` |
+| `ManageScheduleAction` | `nfc_manage_schedule` | `actions/manage_schedule.py:20` | `operation` `item_id` `activity` `start_time` `end_time` |
 
 所有 action `chatter_allow = ["neo_fatum_chatter"]`，仅 NFC 调度时可见。
 
@@ -113,8 +115,9 @@ NFC 在 `EventBus` 上发布 / 订阅的事件名：
 
 **外部注入器接入流程**：
 1. 监听 `on_prompt_build` 事件
-2. 比对 `event.payload.prompt_name` 与自身关注的注入点名
-3. 返回 `ContextContribution` 列表（`scope = "session" | "turn"`）
+2. 比对事件参数 `params["name"]` 与自身关注的注入点名；上下文值从 `params["values"]` 读取
+3. 将结构化贡献追加到 `params["context_contributions"]`，使用 `ContextContribution` 或等价字典（`scope = "session" | "turn"`）
+4. 旧式 `params["values"]["extra"]` 仍兼容，但会被规范化为一次性 notice/turn 注入；未实现的 `persistent` scope 不应被当作持久化状态
 
 注入内容由 `context/planner.py:plan_user_turn` 收集，`scope=session` 的走哈希缓存，`scope=turn` 的每轮独立、通过 `_filter_duplicate_turn_contributions` 去重。
 
@@ -144,6 +147,9 @@ NFC 在 `EventBus` 上发布 / 订阅的事件名：
 | `persistence/session_store.py` | `NFCSessionStore.get_or_create()` / `save()` / `peek()` |
 | `thinker/proactive.py` | `ProactiveThinker.check_all_sessions()` |
 | `thinker/timeout_handler.py` | `TimeoutHandler.handle_timeout()` |
+| `services/world_state_service.py` | `WorldStateService.update_self_state()` / `manage_schedule()` |
+| `domain/world.py` | `WorldTracker.reality_view()` |
+| `domain/proactive_candidate.py` | `ProactiveCandidate` 生命周期与序列化 |
 
 ---
 

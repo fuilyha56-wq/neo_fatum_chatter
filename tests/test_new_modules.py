@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 import neo_fatum_chatter.domain.turn_trigger as _turn_trigger
 import neo_fatum_chatter.runtime.unread_policy as _unread_policy
 from neo_fatum_chatter.handlers.voice_call_history_handler import (
@@ -117,7 +119,24 @@ class TestUnreadPolicy:
         assert len(proactive) == 2
         assert all(not m.message_id.startswith("proactive_") for m in real)
 
-    def test_filter_interrupt_messages(self):
+    @pytest.mark.asyncio
+    async def test_prefer_real_unreads_flushes_only_proactive_messages(self):
+        """真实消息与主动占位撞车时，只保留真实消息。"""
+        flushed = []
+
+        class _Chatter:
+            async def flush_unreads(self, messages):
+                flushed.extend(messages)
+                return len(messages)
+
+        real = MagicMock(message_id="user_1")
+        proactive = MagicMock(message_id="proactive_1")
+        result = await _unread_policy.prefer_real_unreads(
+            _Chatter(), [proactive, real]
+        )
+        assert result == [real]
+        assert flushed == [proactive]
+
         filter_interrupt_messages = _unread_policy.filter_interrupt_messages
 
         known_ids = frozenset(["msg_1", "msg_2"])
