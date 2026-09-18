@@ -427,6 +427,27 @@ async def _build_plain_text_fallback_decision(
     )
 
 
+def empty_reply_retry_due(
+    decision: Decision,
+    retries: int,
+    max_retries: int,
+) -> bool:
+    """空回复打回重试是否应触发。
+
+    只在模型确实没给出可见文本（content 为空被执行层拒发）时触发；
+    发送通道故障（有内容但未送达，``reply_send_infra_failed``）不算空回复——
+    重试只会向模型谎报"你没填 content"，在通道断开时白烧 LLM 轮次，
+    交由"回复完全发送失败取消等待"路径收尾即可。
+    """
+    return (
+        decision.has_reply_action
+        and not decision.visible_reply_segments
+        and not decision.reply_send_infra_failed
+        and max_retries > 0
+        and retries < max_retries
+    )
+
+
 async def execute_orchestrator(
     chatter: NeoFatumChatter,
 ) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
@@ -760,15 +781,14 @@ async def execute_orchestrator(
             )
 
         # ── 空回复打回重试 ──
-        # 模型调用了 nfc_reply 但没有产生任何可见文本（空包弹，包括
-        # content 为空被执行层拒发、reply_execution_failed 已置位的情形）
-        # 时，注入提示要求模型重新生成。真正的"有文本但发送失败"不会
-        # 进入本循环——那时 visible_reply_segments 非空，第二个条件已排除。
-        while (
-            decision.has_reply_action
-            and not decision.visible_reply_segments
-            and loop_state.empty_reply_retries < config.general.max_empty_reply_retries
-            and config.general.max_empty_reply_retries > 0
+        # 模型调用了 nfc_reply 但没有任何可见文本（content 为空被执行层拒发）
+        # 时，注入提示要求模型重新生成。发送通道故障（有内容但未送达，
+        # reply_send_infra_failed）不算空回复，不进入本循环；部分发送成功时
+        # visible_reply_segments 非空，同样被第二个条件排除。
+        while empty_reply_retry_due(
+            decision,
+            loop_state.empty_reply_retries,
+            config.general.max_empty_reply_retries,
         ):
             loop_state.empty_reply_retries += 1
             logger.warning(

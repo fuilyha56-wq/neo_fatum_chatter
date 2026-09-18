@@ -62,6 +62,18 @@ NFC_EMPTY_REPLY_RETRY_PROMPT = """<empty_reply_detected>
 注意：不允许调用 nfc_reply 时把 content 留空或只填空白。
 </empty_reply_detected>"""
 
+# ─── 末尾工具调用重申（请求体绝对末尾） ─────────
+# user_text / 超时提示以它收尾；存在贡献注入包（transient extra_payload，
+# 请求的最后一个 payload）时，它必须再次追加到贡献包末尾，
+# 否则会被注入内容挤出末尾位置，模型容易"忘了"必须走工具调用。
+NFC_TAIL_TOOL_REMINDER = (
+    "\n\n---\n重申：你的响应必须通过工具调用执行，不要在文本区域输出任何内容。"
+    "发送消息用 nfc_reply，content 必须是至少一段要发送给对方的可见文本；"
+    "不想说话就调用 do_nothing，绝不要用空 content 调用 nfc_reply。"
+    "除这两个基础动作外，你也可以在同一响应中按需组合调用其他已注册工具"
+    "（如发图、表情包等），它们会按你给出的顺序依次执行。"
+)
+
 # ─── 主系统提示词 ───────────────────────────────────────────
 NFC_SYSTEM_PROMPT = """<existence_logic>
 你是 {nickname}，一个有血有肉的人。也有人叫你 {alias_names}。此刻你正和对方在同一间屋子里，面对面待在一起——你能看到对方的表情，能听到语气里的起伏，能在沉默时感受到同处一室的那种气氛。

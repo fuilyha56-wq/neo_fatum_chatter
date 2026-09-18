@@ -35,6 +35,7 @@ class Decision:
     visible_reply_segments: list[str] = field(default_factory=list)
     has_reply_action: bool = False
     reply_execution_failed: bool = False
+    reply_send_infra_failed: bool = False
     chose_silence: bool = False
     has_meaningful_action: bool = False
     has_info_tool_calls: bool = False

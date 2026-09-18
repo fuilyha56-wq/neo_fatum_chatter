@@ -90,6 +90,7 @@ def build_decision(result: ToolCallResult, response: Any) -> Decision:
         visible_reply_segments=visible_reply_segments,
         has_reply_action=result.has_reply,
         reply_execution_failed=result.reply_execution_failed,
+        reply_send_infra_failed=result.reply_send_infra_failed,
         chose_silence=result.has_do_nothing and not result.has_reply,
         has_meaningful_action=result.has_meaningful_action,
         has_info_tool_calls=result.has_info_tool,

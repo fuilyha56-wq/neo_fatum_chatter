@@ -9,6 +9,7 @@ from .sources.initial_source import build_initial_context_plan
 from .sources.plugin_source import collect_plugin_turn_contributions
 from .sources.state_source import build_state_contributions
 from .types import ContextContribution, ContextPlan, InitialContextPlan
+from ..prompts.templates import NFC_TAIL_TOOL_REMINDER
 
 
 def _filter_duplicate_turn_contributions(
@@ -94,14 +95,7 @@ class ContextPlanner:
             kept = [line for line in lines if "[proactive_trigger]" not in line]
             cleaned_unreads = "\n".join(kept).strip()
 
-        user_text = (
-            f"[新消息]\n{cleaned_unreads}"
-            "\n\n---\n重申：你的响应必须通过工具调用执行，不要在文本区域输出任何内容。"
-            "发送消息用 nfc_reply，content 必须是至少一段要发送给对方的可见文本；"
-            "不想说话就调用 do_nothing，绝不要用空 content 调用 nfc_reply。"
-            "除这两个基础动作外，你也可以在同一响应中按需组合调用其他已注册工具"
-            "（如发图、表情包等），它们会按你给出的顺序依次执行。"
-        )
+        user_text = f"[新消息]\n{cleaned_unreads}" + NFC_TAIL_TOOL_REMINDER
         prompt_name = (
             getattr(getattr(config, "flashback", None), "injection_point", "")
             or "default_chatter_user_prompt"

@@ -14,6 +14,7 @@ from .sources.history_source import (
     restore_chain_payloads as restore_history_chain_payloads,
 )
 from .types import ContextContribution, ContextPlan, InitialContextPlan
+from ..prompts.templates import NFC_TAIL_TOOL_REMINDER
 
 if TYPE_CHECKING:
     from src.core.models.stream import ChatStream
@@ -225,7 +226,10 @@ class ContextRenderer:
         if not parts:
             return None
 
-        return LLMPayload(ROLE.USER, Text("\n\n".join(parts)))
+        # 贡献包是整个请求体的最后一个 payload。工具调用重申必须保持在
+        # 请求体绝对末尾，否则注入内容一多，模型容易遗忘"必须走工具调用、
+        # content 填可见文本"的硬约束（末尾固定提示策略）。
+        return LLMPayload(ROLE.USER, Text("\n\n".join(parts) + NFC_TAIL_TOOL_REMINDER))
 
     def _render_scoped_contributions(
         self,

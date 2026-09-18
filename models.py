@@ -54,6 +54,13 @@ class ToolCallResult:
     reply_execution_failed: bool = False
     """nfc_reply 是否因发送链路失败而未完整执行。"""
 
+    reply_send_infra_failed: bool = False
+    """nfc_reply 是否因发送通道故障（有内容但未送达）而失败。
+
+    与"content 为空被执行层拒发"必须区分：前者不是模型的错，
+    空回复打回重试只会向模型谎报"你没填 content"并浪费 LLM 轮次。
+    """
+
     execution_success_by_call_id: dict[str, bool] = field(default_factory=dict)
     """每个工具调用的 execute 成功状态。"""
 

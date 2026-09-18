@@ -570,6 +570,9 @@ async def parse_tool_calls(
                     execution_result.failed
                     and execution_result.failure_kind == "send_failure"
                 )
+                # 发送通道故障（有内容但未送达）不算空回复：
+                # 打回重试会向模型谎报"你没填 content"，在通道断开时白烧重试轮。
+                result.reply_send_infra_failed = result.reply_execution_failed
             elif not success:
                 action_dict["content"] = []
                 result.reply_execution_failed = True
