@@ -238,12 +238,23 @@ class NeoFatumChatter(BaseChatter):
         Returns:
             tuple: (request, image_budget, usable_map, prompt_builder, has_history)
         """
+        from src.core.prompt import STREAM_BUCKET_PREFIX
+
+        # 双桶拾取：全局 actor 桶（add_system_reminder 写入方）+
+        # 流私有桶（add_stream_reminder 写入方，如 prompt_injector）。
+        # 框架 create_llm_request 的 with_reminder= 路径会自动登记这两个
+        # source，但 NFC 自建 context_manager 时必须手动补上流私有桶，
+        # 否则外部插件按流注入的 reminder 永远无法进入请求体。
         context_manager = LLMContextManager(
             reminder_sources=[
                 ReminderSourceSpec(
                     bucket="actor",
                     wrap_with_system_tag=True,
-                )
+                ),
+                ReminderSourceSpec(
+                    bucket=f"{STREAM_BUCKET_PREFIX}{chat_stream.stream_id}:actor",
+                    wrap_with_system_tag=True,
+                ),
             ]
         )
         request = create_llm_request(
