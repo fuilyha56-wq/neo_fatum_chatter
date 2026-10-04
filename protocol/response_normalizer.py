@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .compat_adapter import is_deepseek_model_set, try_parse_tool_call_compat_response
 
 
 # ── thinking 标签泄漏清洗 ──────────────────────────────────
@@ -132,15 +131,10 @@ def normalize_response(response: Any) -> NormalizedResponse:
     if used_reasoning and not (cleaned_message_str or "").strip() and not getattr(response, "call_list", None):
         response.message = resolved_text
 
-    used_compat_tool_calls = False
-    if not getattr(response, "call_list", None) and is_deepseek_model_set(getattr(response, "model_set", None)):
-        used_compat_tool_calls = try_parse_tool_call_compat_response(response)
-
     normalized_text, _ = resolve_response_text(response)
     return NormalizedResponse(
         response=response,
         text=normalized_text,
         used_reasoning_content=used_reasoning,
-        used_compat_tool_calls=used_compat_tool_calls,
         stripped_thinking_block=stripped_thinking_block,
     )

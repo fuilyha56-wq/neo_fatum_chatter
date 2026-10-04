@@ -127,3 +127,20 @@ def build_request_view(
         transient_count=len(transients),
         transient_payloads=transients,
     )
+
+
+async def send_view_round(chain: Any, send_target: RequestView) -> Any:
+    """发送一轮带 transient 视图的请求，返回未消费的 LLMResponse。
+
+    与 ``send_with_nfc_model_clients`` 的 LLMResponse 分支保持相同的链前置
+    处理（消费未消费的响应、回填 assistant payload），随后每轮基于最新
+    链重建视图——草稿改写/提醒注入后的 payload 纳入发送，transient 注入包
+    始终保持在请求体链尾。
+    """
+    if getattr(chain, "_consumed", None) is False:
+        await chain
+    if getattr(chain, "_appended_to_context", None) is False:
+        chain.add_payload(chain.to_payload())
+        chain._appended_to_context = True
+    view = build_request_view(chain, send_target.transient_payloads)
+    return await view.send(auto_append_response=True, stream=False)

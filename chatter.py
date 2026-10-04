@@ -33,6 +33,7 @@ from src.kernel.llm import LLMContextManager, ReminderSourceSpec
 from .debug.log_formatter import format_prompt_for_log
 from .services.context_sanitizer import prepare_payload_chain_for_send
 from .protocol.perception_retry import apply_perception_followup
+from .runtime.request_view import send_view_round
 from .protocol.reasoning_transport import (
     attach_nfc_model_clients,
     send_with_nfc_model_clients,
@@ -308,6 +309,7 @@ class NeoFatumChatter(BaseChatter):
         self,
         response: Any,
         max_retries: int,
+        send_target: Any | None = None,
     ) -> Any:
         """发送 LLM 请求，实现两阶段"感知→决策"循环。
 
@@ -321,11 +323,15 @@ class NeoFatumChatter(BaseChatter):
             1. send(auto_append_response=True) → 模型可能输出纯文本
             2. 检查 call_list 是否为空
             3. 若为空且有文本内容 → 感知阶段完成，注入跟进提示
+               （首次纯文本用温和引导，重试仍失败则升级为硬纠正提醒）
             4. 再次 send() → 模型基于已有记忆输出工具调用
 
         Args:
             response: LLM 请求/响应链对象（LLMRequest 或 LLMResponse）
             max_retries: 最大感知-决策循环次数（0 表示不做二次发送）
+            send_target: 带 transient 注入包的发送视图（可选）。传入时每轮
+                基于最新链重建视图发送，注入包保持在请求体链尾——带注入包
+                的回合同样享受纯文本重试与提醒升级，不再被裸发送分支绕过。
 
         Returns:
             已消费（await）的 LLMResponse 对象
@@ -342,11 +348,17 @@ class NeoFatumChatter(BaseChatter):
 
             # auto_append_response=True：先把响应接到 response 链上；
             # 若本轮只是纯文本草稿，会在下方改写成未发送草稿说明。
-            new_response = await send_with_nfc_model_clients(
-                response,
-                auto_append_response=True, stream=False
-            )
-            await new_response
+            if send_target is not None:
+                new_response = await send_view_round(response, send_target)
+            else:
+                new_response = await send_with_nfc_model_clients(
+                    response,
+                    auto_append_response=True, stream=False
+                )
+            # RequestView.send 内部已消费结果，重复 await 会抛
+            # LLMResponseConsumedError；只消费仍未消费的响应。
+            if not getattr(new_response, "_consumed", False):
+                await new_response
 
             normalized = normalize_response(new_response)
             if normalized.used_reasoning_content and not normalized.has_tool_calls:
@@ -369,7 +381,12 @@ class NeoFatumChatter(BaseChatter):
                     f"(第 {attempt + 1} 轮): "
                     f"{perceive_text[:80]}{'...' if len(perceive_text) > 80 else ''}"
                 )
-                apply_perception_followup(new_response, perceive_text)
+                # 本次注入是最后一次重试（如 max_retries=1 的唯一重试）时，
+                # 直接使用硬纠正提醒——没有"先温和后硬"的余地。
+                is_final = (attempt + 1) >= max_retries
+                apply_perception_followup(
+                    new_response, perceive_text, attempt=attempt, is_final=is_final
+                )
                 response = new_response
                 continue
 

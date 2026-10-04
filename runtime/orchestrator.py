@@ -671,10 +671,14 @@ async def execute_orchestrator(
                         f"[打断] 连续打断已达上限 {config.buffer.max_consecutive_interrupts}，"
                         "本次不再打断，等待 LLM 正常完成后统一处理"
                     )
+                # 带注入包的回合也走感知循环（send_target 每轮重建视图，
+                # 注入包保持在链尾）：此前裸发送分支会绕过纯文本重试与
+                # 提醒升级，模型破防输出纯文本时直接落入 sub actor 兜底。
                 if transient_payloads:
-                    response = await send_target.send(
-                        auto_append_response=True,
-                        stream=False,
+                    response = await chatter._send_with_perceive_loop(
+                        response,
+                        config.general.max_compat_retries,
+                        send_target=send_target,
                     )
                     response = strip_transient_payloads(send_target, response)
                 else:

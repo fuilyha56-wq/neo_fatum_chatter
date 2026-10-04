@@ -46,7 +46,13 @@ def is_deepseek_model_set(model_set: Any) -> bool:
 
 
 def prepare_nfc_model_set(model_set: Any) -> Any:
-    """为 NFC 请求准备模型集，并对特定 provider 做请求级兼容。"""
+    """为 NFC 请求准备模型集，并保留模型级 compat 配置。
+
+    NFC 与 NDFC 共用 ``BaseChatter.inject_usables`` 注册出的 TOOL payload。
+    ``tool_call_compat`` 由核心 OpenAI 客户端统一处理，不能在 NFC 这里
+    改写成另一套工具 schema 或关闭，否则会导致同一模型在两个 chatter 中
+    看到不同的工具协议。
+    """
     if not isinstance(model_set, list):
         return model_set
 
@@ -74,6 +80,7 @@ def prepare_nfc_model_set(model_set: Any) -> Any:
             extra_params["enable_thinking"] = False
             extra_params["thinking"] = {"type": "disabled", "enabled": False}
         model_entry["extra_params"] = extra_params
+        model_entry["tool_call_compat"] = bool(model_entry.get("tool_call_compat", False))
 
     return prepared_model_set
 
@@ -142,7 +149,10 @@ def _sync_last_assistant_payload(response: Any) -> bool:
 
 
 def build_tool_call_compat_retry_prompt(payloads: Any) -> str | None:
-    """为 DeepSeek 的纯文本重试构造 compat JSON 跟进提示。"""
+    """为旧调用方构造 compat JSON 跟进提示。
+
+    NFC 当前主流程不再调用此函数；它保留用于兼容旧导入路径和外部调用方。
+    """
     if not isinstance(payloads, list):
         return None
 
