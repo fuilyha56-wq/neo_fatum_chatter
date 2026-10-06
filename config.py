@@ -165,19 +165,18 @@ class NFCConfig(BaseConfig):
         )
         enable_custom_tick_interval: bool = Field(
             default=False,
-            label="启用独立 tick 间隔",
+            label="旧版 tick 开关（兼容字段）",
             description=(
-                "是否启用 NFC 独立的主循环 tick 间隔。"
-                "关闭时跟随主程序 bot.tick_interval 全局配置；"
-                "开启时使用下方 custom_tick_interval 覆盖该 stream 的 tick 间隔。"
+                "保留用于兼容旧配置。当前 custom_tick_interval 始终直接决定"
+                "该 NFC 流的 tick 间隔，不再受此开关控制。"
             ),
         )
         custom_tick_interval: float = Field(
             default=5.0,
             label="tick 间隔（秒）",
             description=(
-                "NFC 独立主循环 tick 间隔（秒），仅在 enable_custom_tick_interval 为 true 时生效。"
-                "过短会增加消耗，过长会降低响应速度。必须大于 0。"
+                "该 NFC 流的主循环 tick 间隔（秒），语义与主程序 bot.tick_interval 相同。"
+                "直接设置即可生效；过短会增加消耗，过长会降低响应速度。必须大于 0。"
             ),
         )
 
@@ -208,8 +207,7 @@ class NFCConfig(BaseConfig):
             description=(
                 "等待期间收到新消息时是否抑制提前唤醒。"
                 "开启后，Bot 在等待超时到达前不会因为新消息提前触发 LLM，"
-                "所有消息在等待结束后统一处理；"
-                "默认关闭，新消息会立即打断等待并提前触发 LLM。"
+                "所有消息在等待结束后统一处理；默认关闭，新消息会立即打断等待并提前触发 LLM。"
             ),
         )
 

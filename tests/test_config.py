@@ -18,6 +18,23 @@ def test_wait_min_max_seconds_are_ordered() -> None:
     assert config.wait.max_seconds == 30.0
 
 
+def test_wait_does_not_suppress_early_wake_by_default() -> None:
+    config = NFCConfig()
+
+    assert config.wait.suppress_early_wake is False
+
+
+def test_custom_tick_interval_is_directly_configured() -> None:
+    config = NFCConfig(
+        general={
+            "enable_custom_tick_interval": False,
+            "custom_tick_interval": 10.0,
+        }
+    )
+
+    assert config.general.custom_tick_interval == 10.0
+
+
 def test_positive_intervals_fall_back_when_not_positive() -> None:
     config = NFCConfig(
         proactive={"min_interval": -1, "check_interval": 0},
