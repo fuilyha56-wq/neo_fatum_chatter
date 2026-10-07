@@ -118,7 +118,7 @@
         "log_api": "1.0.0",
         "send_api": "1.0.0",
         "service_api": "1.0.0",
-        "stream_api": "1.0.0"
+        "stream_api": "2.0.0"
     },
     "display_name": "Neo命运聊天器",
     "categories": [
